@@ -53,11 +53,13 @@ BASE_URL    = "https://www.transfermarkt.com"
 LEAGUE_CODE = "FR1"
 SEASON_ID   = 2025
 
-DATA_DIR = Path("data/raw/transfermarkt")
+ROOT     = Path(__file__).resolve().parent.parent
+DATA_DIR = ROOT / "data" / "raw" / "transfermarkt"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-TEAMS_FILE   = DATA_DIR / f"ligue1_teams_{SEASON_ID}.csv"
-PLAYERS_FILE = DATA_DIR / f"ligue1_players_{SEASON_ID}_complete.csv"
+# File names in season_season+1 format
+TEAMS_FILE   = DATA_DIR / f"ligue1_teams_{SEASON_ID}_{SEASON_ID + 1}.csv"
+PLAYERS_FILE = DATA_DIR / f"ligue1_players_{SEASON_ID}_{SEASON_ID + 1}_complete.csv"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -69,13 +71,13 @@ MAX_RETRIES     = 3
 
 PLAYER_FIELDNAMES = [
     "id", "name", "link", "age", "birth_date", "birth_place",
-    "nationalities", "height_cm", "preferred_foot", "current_club", "position",
+    "nationalities", "height_cm", "current_club", "position",
     "shirt_number", "joined_date", "contract_end", "market_value_m",
     "matches", "goals", "assists", "minutes", "yellow_cards", "red_cards"
 ]
 
 TEAMS_FIELDNAMES = [
-    "team", "link", "league", "season", "squad_size", "average_age",
+    "id", "team", "link", "league", "season", "squad_size", "average_age",
     "national_team_players", "stadium_name", "stadium_capacity",
     "table_position", "years_in_league"
 ]
@@ -110,6 +112,12 @@ def fetch_url(url) -> Optional[str]:
             time.sleep(1 + random.random() * 2)
     print(f"  [ERROR] Failed to fetch {url} after {MAX_RETRIES} attempts")
     return None
+
+
+def extract_id(url: str) -> str:
+    """Extrait l'ID Transfermarkt depuis une URL /verein/ID/..."""
+    m = re.search(r"/verein/(\d+)", url)
+    return m.group(1) if m else ""
 
 
 def convert_height_to_cm(height_str: str) -> int:
@@ -188,11 +196,13 @@ def scrape_teams() -> list:
 
         team_name = link_cell.a["title"]
         team_link = f"{BASE_URL}{link_cell.a['href']}"
+        id     = extract_id(team_link)
 
-        print(f"  Extracting details for {team_name}...")
+        print(f"  Extracting details for {team_name} (id={id})...")
         details = _extract_team_details(team_link)
 
         teams.append({
+            "id":                 id,
             "team":                  team_name,
             "link":                  team_link,
             "league":                LEAGUE_CODE,
@@ -327,35 +337,22 @@ def get_all_player_stubs() -> list:
 # PLAYER DETAIL SCRAPING
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _extract_profile_data(html: str) -> dict:
+def _extract_player_stats(html: str, player_name: str) -> dict:
     soup = BeautifulSoup(html, "html.parser")
-    data = {"shirt_number": 0, "preferred_foot": None}
+    data = {
+        "name": player_name, "age": 0, "birth_date": None, "birth_place": None,
+        "nationalities": None, "height_cm": 0,
+        "current_club": None, "position": None, "shirt_number": 0,
+        "joined_date": None, "contract_end": None, "market_value_m": 0,
+        "matches": 0, "goals": 0, "assists": 0,
+        "minutes": 0, "yellow_cards": 0, "red_cards": 0,
+    }
 
     span = soup.find("span", class_="data-header__shirt-number")
     if span:
         m = re.search(r"#(\d+)", span.get_text(strip=True))
         if m:
             data["shirt_number"] = int(m.group(1))
-
-    cells = soup.find_all("span", class_="info-table__content")
-    for i, cell in enumerate(cells):
-        if "Foot:" in cell.get_text(strip=True) and i + 1 < len(cells):
-            data["preferred_foot"] = cells[i + 1].get_text(strip=True)
-            break
-
-    return data
-
-
-def _extract_player_stats(html: str, player_name: str) -> dict:
-    soup = BeautifulSoup(html, "html.parser")
-    data = {
-        "name": player_name, "age": 0, "birth_date": None, "birth_place": None,
-        "nationalities": None, "height_cm": 0, "preferred_foot": None,
-        "current_club": None, "position": None, "shirt_number": 0,
-        "joined_date": None, "contract_end": None, "market_value_m": 0,
-        "matches": 0, "goals": 0, "assists": 0,
-        "minutes": 0, "yellow_cards": 0, "red_cards": 0,
-    }
 
     for item in soup.find_all("li", class_="data-header__label"):
         label = item.get_text(strip=True)
@@ -497,20 +494,16 @@ def _extract_player_stats(html: str, player_name: str) -> dict:
 
 
 def scrape_player_details(player_id: str, player_name: str, profile_url: str) -> Optional[dict]:
-    stats_url    = profile_url.replace("/profil/", "/leistungsdaten/")
-    profile_html = fetch_url(profile_url)
-    stats_html   = fetch_url(stats_url)
+    stats_url  = profile_url.replace("/profil/", "/leistungsdaten/")
+    stats_html = fetch_url(stats_url)
 
-    if not profile_html or not stats_html:
+    if not stats_html:
         print(f"  [FAILED] {player_name} ({player_id})")
         return None
 
-    profile_data = _extract_profile_data(profile_html)
     data         = _extract_player_stats(stats_html, player_name)
-    data["shirt_number"]   = profile_data["shirt_number"]
-    data["preferred_foot"] = profile_data["preferred_foot"]
-    data["id"]             = player_id
-    data["link"]           = profile_url
+    data["id"]   = player_id
+    data["link"] = profile_url
     return data
 
 
@@ -550,7 +543,6 @@ def run_players(player_ids=None, limit=None):
     t0 = time.time()
 
     if player_ids:
-        # ── UPDATE MODE: specific IDs ────────────────────────────────────────
         print(f"Targeting {len(player_ids)} specific player(s) — update mode")
         print_separator("-", 80)
 
@@ -561,8 +553,7 @@ def run_players(player_ids=None, limit=None):
 
         existing = load_csv_as_dict(PLAYERS_FILE, "id")
 
-        # Validate requested IDs
-        stubs    = []
+        stubs     = []
         not_found = []
         for pid in player_ids:
             if pid in existing:
@@ -600,7 +591,6 @@ def run_players(player_ids=None, limit=None):
                 fail += 1
             random_delay(2, 3)
 
-        # Rewrite the full CSV with updated rows
         write_csv(PLAYERS_FILE, list(existing.values()), PLAYER_FIELDNAMES)
 
         elapsed = time.time() - t0
@@ -617,7 +607,6 @@ def run_players(player_ids=None, limit=None):
         print_separator("=", 80)
 
     else:
-        # ── FULL MODE: all players (resumable) ───────────────────────────────
         already_scraped = set()
         if PLAYERS_FILE.exists():
             with open(PLAYERS_FILE, "r", encoding="utf-8") as f:
@@ -625,7 +614,6 @@ def run_players(player_ids=None, limit=None):
                     already_scraped.add(row["id"])
             print(f"[INFO] {len(already_scraped)} players already scraped — will skip them")
 
-        # Step 1: collect stubs from all club pages
         print("\nStep 1: Fetching player list from all clubs...")
         all_players = get_all_player_stubs()
         print(f"  {len(all_players)} players found")
@@ -634,7 +622,6 @@ def run_players(player_ids=None, limit=None):
             all_players = all_players[:limit]
             print(f"  [TEST MODE] Limited to first {limit} players")
 
-        # Step 2: scrape details for new players only
         to_scrape = [p for p in all_players if p["id"] not in already_scraped]
 
         if not to_scrape:
@@ -694,32 +681,14 @@ Examples:
         """
     )
 
-    parser.add_argument(
-        "--all",
-        action="store_true",
-        help="Delete all files and re-scrape everything (teams + players)"
-    )
-    parser.add_argument(
-        "--teams",
-        action="store_true",
-        help="Re-scrape teams (deletes and recreates the file)"
-    )
-    parser.add_argument(
-        "--players",
-        nargs="*",
-        metavar="ID",
-        help=(
-            "Re-scrape players. "
-            "No ID: resumable full scrape. "
-            "With IDs: update only those players."
-        )
-    )
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="Max number of players to scrape (test mode)"
-    )
+    parser.add_argument("--all", action="store_true",
+        help="Delete all files and re-scrape everything (teams + players)")
+    parser.add_argument("--teams", action="store_true",
+        help="Re-scrape teams (deletes and recreates the file)")
+    parser.add_argument("--players", nargs="*", metavar="ID",
+        help="Re-scrape players. No ID: resumable. With IDs: update only those.")
+    parser.add_argument("--limit", type=int, default=None,
+        help="Max number of players to scrape (test mode)")
 
     args = parser.parse_args()
 
@@ -739,7 +708,7 @@ def main():
     t_start = time.time()
 
     print_separator("=", 80)
-    print("INGEST TRANSFERMARKT — Ligue 1 2025")
+    print("INGEST TRANSFERMARKT — Ligue 1 2025-2026")
     print_separator("=", 80)
 
     if args.all:
@@ -767,7 +736,6 @@ def main():
     else:
         if args.teams:
             run_teams()
-
         if args.players is not None:
             if args.players:
                 run_players(player_ids=args.players, limit=args.limit)

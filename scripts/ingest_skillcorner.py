@@ -31,16 +31,14 @@ USAGE
 
 WHAT EACH ARGUMENT COVERS
 ──────────────────────────
-  --players  → players reference JSON + physical + off_ball_runs
-                                     + on_ball_pressures + passes
+  --players  → players reference JSON + physical
                No IDs  : all players (overwrites existing files)
                With IDs: only those players (overwrites)
 
   --teams    → teams reference JSON
                No IDs  : all teams
 
-  --matchs   → matches reference JSON + dynamic_events (CSV)
-                                      + data_collection (JSON)
+  --matchs   → matches reference JSON
                No IDs  : all matches, SKIP if file already exists
                With IDs: only those matches, FORCE re-download
 
@@ -74,16 +72,12 @@ COMPETITION = {
 }
 
 # Output directories
-DATA_DIR         = Path("data/raw/skillcorner")
-DIR_PLAYERS      = DATA_DIR / "players"
-DIR_TEAMS        = DATA_DIR / "teams"
-DIR_MATCHES      = DATA_DIR / "matchs"
-DIR_PHYSICAL     = DATA_DIR / "physical"
-DIR_OFF_BALL     = DATA_DIR / "in_possession" / "off_ball_runs"
-DIR_ON_BALL      = DATA_DIR / "in_possession" / "on_ball_pressures"
-DIR_PASSES       = DATA_DIR / "in_possession" / "passes"
-DIR_DYN_EVENTS   = DATA_DIR / "matchs" / "dynamic_events"
-DIR_DATA_COLLECT = DATA_DIR / "matchs" / "data_collection"
+ROOT     = Path(__file__).resolve().parent.parent
+DATA_DIR = ROOT / "data" / "raw" / "skillcorner"
+DIR_PLAYERS  = DATA_DIR / "players"
+DIR_TEAMS    = DATA_DIR / "teams"
+DIR_MATCHES  = DATA_DIR / "matches"
+DIR_PHYSICAL = DATA_DIR / "physical"
 
 # Reference JSON files
 PLAYERS_JSON = DIR_PLAYERS / "ligue1_players_2025_2026.json"
@@ -96,9 +90,7 @@ MATCHES_JSON = DIR_MATCHES / "ligue1_matches_2025_2026.json"
 # ─────────────────────────────────────────────────────────────────────────────
 
 def create_dirs():
-    for d in [DIR_PLAYERS, DIR_TEAMS, DIR_MATCHES, DIR_PHYSICAL,
-              DIR_OFF_BALL, DIR_ON_BALL, DIR_PASSES,
-              DIR_DYN_EVENTS, DIR_DATA_COLLECT]:
+    for d in [DIR_PLAYERS, DIR_TEAMS, DIR_MATCHES, DIR_PHYSICAL]:
         d.mkdir(parents=True, exist_ok=True)
 
 
@@ -248,36 +240,6 @@ PLAYER_ENDPOINTS = [
             "physical_check_passed": "true", "response_format": "json"
         }
     },
-    {
-        "name": "off_ball_runs",
-        "url":  "https://skillcorner.com/api/in_possession/off_ball_runs/",
-        "dir":  DIR_OFF_BALL,
-        "params": {
-            "results": "win,lose,draw", "venue": "home,away",
-            "channel": "all", "third": "all",
-            "average_per": "match", "group_by": "match,player"
-        }
-    },
-    {
-        "name": "on_ball_pressures",
-        "url":  "https://skillcorner.com/api/in_possession/on_ball_pressures/",
-        "dir":  DIR_ON_BALL,
-        "params": {
-            "results": "win,lose,draw", "venue": "home,away",
-            "channel": "all", "third": "all",
-            "average_per": "match", "group_by": "match,player"
-        }
-    },
-    {
-        "name": "passes",
-        "url":  "https://skillcorner.com/api/in_possession/passes/",
-        "dir":  DIR_PASSES,
-        "params": {
-            "results": "win,lose,draw", "venue": "home,away",
-            "channel": "all", "third": "all",
-            "average_per": "match", "group_by": "match,player"
-        }
-    },
 ]
 
 
@@ -362,90 +324,44 @@ def fetch_players_data(players):
 # MATCH DATA FETCH
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _fetch_match(match, force=False):
-    """
-    Fetch dynamic_events (CSV) + data_collection (JSON) for one match.
-    force=True → re-downloads even if file already exists.
-    """
-    mid  = match["id"]
-    home = match.get("home_team", {}).get("short_name", "?")
-    away = match.get("away_team", {}).get("short_name", "?")
-    safe_print(f"[{mid}] {home} vs {away}...")
-
-    results = {}
-
-    # ── dynamic_events (CSV)
-    dyn_file = DIR_DYN_EVENTS / f"match_{mid}_dynamic_events.csv"
-    if dyn_file.exists() and not force:
-        print("[SKIP dyn_events]", end=" ")
-        results["dyn"] = "skip"
-    else:
-        csv_text, status = api_get(
-            f"https://skillcorner.com/api/match/{mid}/dynamic_events/",
-            {"file_format": "csv", "ignore_dynamic_events_check": "true"},
-            as_text=True
-        )
-        if status == 200 and csv_text:
-            dyn_file.write_text(csv_text, encoding="utf-8")
-            rows = csv_text.count("\n") - 1
-            print(f"[OK dyn_events ~{rows} rows]", end=" ")
-            results["dyn"] = "ok"
-        else:
-            print(f"[ERROR dyn_events HTTP {status}]", end=" ")
-            results["dyn"] = "error"
-
-    # ── data_collection (JSON)
-    col_file = DIR_DATA_COLLECT / f"match_{mid}_data_collection.json"
-    if col_file.exists() and not force:
-        print("[SKIP data_collection]")
-        results["col"] = "skip"
-    else:
-        data, status = api_get(
-            f"https://skillcorner.com/api/match/{mid}/data_collection/"
-        )
-        if status == 200 and data:
-            save_json(col_file, data)
-            print(f"[OK data_collection status={data.get('status')} "
-                  f"dyn_check={data.get('dynamic_events_check')}]")
-            results["col"] = "ok"
-        else:
-            print(f"[ERROR data_collection HTTP {status}]")
-            results["col"] = "error"
-
-    time.sleep(0.3)
-    return results
-
-
 def fetch_matches_data(matches, force=False):
-    """Fetch match data for the given list of matches."""
+    """Fetch match reference data for the given list of matches."""
     print(f"\nFetching match data for {len(matches)} matches...")
     print_separator("=", 80)
 
-    counters = {"dyn": {"ok": 0, "skip": 0, "error": 0},
-                "col": {"ok": 0, "skip": 0, "error": 0}}
+    ok = skip = errors = 0
 
     for i, match in enumerate(matches):
-        safe_print(f"[{i+1}/{len(matches)}]")
-        results = _fetch_match(match, force=force)
-        for key in ("dyn", "col"):
-            r = results.get(key, "error")
-            if r == "ok":
-                counters[key]["ok"] += 1
-            elif r.startswith("skip"):
-                counters[key]["skip"] += 1
+        mid  = match["id"]
+        home = match.get("home_team", {}).get("short_name", "?")
+        away = match.get("away_team", {}).get("short_name", "?")
+        safe_print(f"[{i+1}/{len(matches)}] [{mid}] {home} vs {away}...")
+
+        match_file = DIR_MATCHES / f"match_{mid}.json"
+
+        if match_file.exists() and not force:
+            print("[SKIP]")
+            skip += 1
+        else:
+            data, status = api_get(f"https://skillcorner.com/api/match/{mid}/")
+            if status == 200 and data:
+                save_json(match_file, data)
+                print("[OK]")
+                ok += 1
             else:
-                counters[key]["error"] += 1
+                print(f"[ERROR HTTP {status}]")
+                errors += 1
+
+        time.sleep(0.3)
 
     print_separator("=", 80)
     print("\nMATCHES SUMMARY")
     print_separator("=", 80)
-    print(f"Total matches processed  : {len(matches)}")
-    print(f"dynamic_events  — OK: {counters['dyn']['ok']}  "
-          f"Skip: {counters['dyn']['skip']}  Errors: {counters['dyn']['error']}")
-    print(f"data_collection — OK: {counters['col']['ok']}  "
-          f"Skip: {counters['col']['skip']}  Errors: {counters['col']['error']}")
-    print(f"Output: {DIR_DYN_EVENTS}")
-    print(f"        {DIR_DATA_COLLECT}")
+    print(f"Total matches processed : {len(matches)}")
+    print(f"Success                 : {ok}")
+    print(f"Skipped                 : {skip}")
+    print(f"Errors                  : {errors}")
+    print(f"Output                  : {DIR_MATCHES}")
     print_separator("=", 80)
 
 
@@ -596,7 +512,6 @@ def main():
             targets = all_matches[:args.limit] if args.limit else all_matches
             if args.limit:
                 print(f"[TEST MODE] Limited to first {args.limit} matches")
-            # No IDs → skip already-downloaded files
             fetch_matches_data(targets, force=False)
 
         step_timings["matches"] = time.time() - t_step
@@ -607,10 +522,9 @@ def main():
     print("\n" + "=" * 80)
     print("FINAL SUMMARY")
     print("=" * 80)
+    print(f"  {'TOTAL':<30} {total:.2f}s  ({total/60:.2f} min)")
     for step, duration in step_timings.items():
         print(f"  {step:<30} {duration:.2f}s  ({duration/60:.2f} min)")
-    print_separator("-", 80)
-    print(f"  {'TOTAL':<30} {total:.2f}s  ({total/60:.2f} min)")
     print("=" * 80 + "\n")
 
 
