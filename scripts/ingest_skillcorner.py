@@ -15,16 +15,16 @@ USAGE
       python ingest_skillcorner.py --players 14 18 202
 
   All matches (skip already downloaded):
-      python ingest_skillcorner.py --matchs
+      python ingest_skillcorner.py --matches
 
   Specific matches (force re-download):
-      python ingest_skillcorner.py --matchs 2038827 2038828
+      python ingest_skillcorner.py --matches 2038827 2038828
 
   Teams only:
       python ingest_skillcorner.py --teams
 
   Mix:
-      python ingest_skillcorner.py --players 14 18 --matchs 2038827
+      python ingest_skillcorner.py --players 14 18 --matches 2038827
 
   Test mode (limit number of items):
       python ingest_skillcorner.py --all --limit 10
@@ -38,11 +38,11 @@ WHAT EACH ARGUMENT COVERS
   --teams    → teams reference JSON
                No IDs  : all teams
 
-  --matchs   → matches reference JSON
+  --matches  → matches reference JSON
                No IDs  : all matches, SKIP if file already exists
                With IDs: only those matches, FORCE re-download
 
-  --all      → equivalent to --players --teams --matchs (no IDs)
+  --all      → equivalent to --players --teams --matches (no IDs)
 """
 
 import os
@@ -378,10 +378,10 @@ Examples:
   python ingest_skillcorner.py --all
   python ingest_skillcorner.py --players
   python ingest_skillcorner.py --players 14 18 202
-  python ingest_skillcorner.py --matchs
-  python ingest_skillcorner.py --matchs 2038827 2038828
+  python ingest_skillcorner.py --matches
+  python ingest_skillcorner.py --matches 2038827 2038828
   python ingest_skillcorner.py --teams
-  python ingest_skillcorner.py --players 14 18 --matchs 2038827
+  python ingest_skillcorner.py --players 14 18 --matches 2038827
   python ingest_skillcorner.py --all --limit 10
         """
     )
@@ -403,7 +403,7 @@ Examples:
         help="Re-fetch teams."
     )
     parser.add_argument(
-        "--matchs",
+        "--matches",
         nargs="*",
         metavar="ID",
         help="Re-fetch match data. No ID = skip existing files. With IDs = force re-download."
@@ -417,7 +417,7 @@ Examples:
 
     args = parser.parse_args()
 
-    if not args.all and args.players is None and not args.teams and args.matchs is None:
+    if not args.all and args.players is None and not args.teams and args.matches is None:
         parser.print_help()
         sys.exit(1)
 
@@ -446,8 +446,8 @@ def main():
             parts.append(f"players {args.players if args.players else '(all)'}")
         if args.teams:
             parts.append("teams")
-        if args.matchs is not None:
-            parts.append(f"matchs {args.matchs if args.matchs else '(all)'}")
+        if args.matches is not None:
+            parts.append(f"matches {args.matches if args.matches else '(all)'}")
         print(f"Mode    : {' | '.join(parts)}")
     if args.limit:
         print(f"Limit   : {args.limit} (TEST MODE)")
@@ -493,15 +493,15 @@ def main():
         step_timings["teams"] = time.time() - t_step
 
     # ── MATCHES ───────────────────────────────────────────────────────────────
-    if args.all or args.matchs is not None:
+    if args.all or args.matches is not None:
         print_section("STEP: MATCHES")
         t_step = time.time()
 
         all_matches = refresh_matches_ref(edition_id)
 
-        if args.matchs:
+        if args.matches:
             # Explicit IDs → force re-download
-            ids     = {int(x) for x in args.matchs}
+            ids     = {int(x) for x in args.matches}
             targets = [m for m in all_matches if m["id"] in ids]
             missing = ids - {m["id"] for m in targets}
             if missing:

@@ -1,12 +1,12 @@
 """
 build_players_mapping.py
 ------------------------
-Construit la table de correspondance des IDs joueurs entre :
-  - StatsBomb  (player_id)
+Builds the player ID mapping table between:
+  - StatsBomb   (player_id)
   - SkillCorner (id)
   - Transfermarkt (id)
 
-Matching par : nom normalisé + date de naissance (exact puis fuzzy)
+Matching by: normalized name + date of birth (exact then fuzzy)
 
 OUTPUT
 ------
@@ -26,9 +26,9 @@ from rapidfuzz import fuzz
 
 ROOT = Path(__file__).resolve().parent.parent
 
-SB_PLAYERS_JSON = ROOT / "data" / "raw" / "statsbomb"   / "players" / "ligue1_players_2025_2026.json"
-SC_PLAYERS_JSON = ROOT / "data" / "raw" / "skillcorner" / "players" / "ligue1_players_2025_2026.json"
-TM_PLAYERS_CSV  = ROOT / "data" / "raw" / "transfermarkt" / "ligue1_players_2025_complete.csv"
+SB_PLAYERS_JSON = ROOT / "data" / "raw" / "statsbomb"    / "players" / "ligue1_players_2025_2026.json"
+SC_PLAYERS_JSON = ROOT / "data" / "raw" / "skillcorner"  / "players" / "ligue1_players_2025_2026.json"
+TM_PLAYERS_CSV  = ROOT / "data" / "raw" / "transfermarkt" / "ligue1_players_2025_2026_complete.csv"
 
 OUTPUT_DIR = ROOT / "data" / "raw" / "mapping"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -81,8 +81,8 @@ def load_statsbomb():
             "sb_name":       p.get("player_name", ""),
             "sb_birth_date": normalize_date(p.get("birth_date", "")),
             "_norm_name":    normalize_name(p.get("player_name", "")),
+            "_norm_known":   normalize_name(p.get("player_known_name", "")),  # e.g. "Marquinhos"
         })
-    print(f"[SB]  {len(players)} joueurs chargés")
     return players
 
 
@@ -97,8 +97,8 @@ def load_skillcorner():
             "sc_name":       p.get("short_name", full_name),
             "sc_birth_date": normalize_date(p.get("birthday", "")),
             "_norm_name":    normalize_name(full_name),
+            "_norm_short":   normalize_name(p.get("short_name", "")),  # e.g. "Marquinhos"
         })
-    print(f"[SC]  {len(players)} joueurs chargés")
     return players
 
 
@@ -112,7 +112,6 @@ def load_transfermarkt():
                 "tm_birth_date": normalize_date(row.get("birth_date", "")),
                 "_norm_name":    normalize_name(row["name"]),
             })
-    print(f"[TM]  {len(players)} joueurs chargés")
     return players
 
 
@@ -122,13 +121,13 @@ def load_transfermarkt():
 
 def name_similarity(a: str, b: str) -> int:
     """
-    Similarité entre deux noms via thefuzz (distance de Levenshtein).
-    - token_sort_ratio : insensible à l'ordre des mots
-    - token_set_ratio  : insensible aux mots supplémentaires (noms composés longs)
-    On prend le max des deux pour couvrir :
-      "angel gomes" vs "adilson angel abreu de almeida gomes"  -> token_set_ratio élevé
-      "pierre lees melou" vs "pierre lees-melou"               -> token_sort_ratio élevé
-    Retourne un score entre 0 et 100.
+    Similarity between two names using rapidfuzz (Levenshtein distance).
+    - token_sort_ratio : order-insensitive
+    - token_set_ratio  : insensitive to extra tokens (long compound names)
+    We take the max of both to cover:
+      "angel gomes" vs "adilson angel abreu de almeida gomes"  -> high token_set_ratio
+      "pierre lees melou" vs "pierre lees-melou"               -> high token_sort_ratio
+    Returns a score between 0 and 100.
     """
     return max(
         fuzz.token_sort_ratio(a, b),
@@ -138,10 +137,11 @@ def name_similarity(a: str, b: str) -> int:
 
 def match_players(source, target, source_key, target_key):
     """
-    1. Exact match sur (nom normalisé, date de naissance)
-    2. Fuzzy nom seul >= 95 : nom très similaire sans vérification de date
-    3. Fuzzy nom + date   : même date de naissance + score nom >= 60
-    Retourne un dict {source_id: (target_player, method)}.
+    1. Exact match on (normalized name, date of birth)
+    2. Fuzzy name only >= 95 : very similar name without date check
+    3. Fuzzy name + date     : same date of birth + name score >= 45
+    4. Alias + date          : same date of birth, nickname variants >= 95
+    Returns a dict {source_id: (target_player, method)}.
     """
     exact_index = {}
     for p in target:
@@ -159,13 +159,14 @@ def match_players(source, target, source_key, target_key):
         sid  = p[f"{source_key}_id"]
         name = p["_norm_name"]
         date = p[f"{source_key}_birth_date"]
+        known = p.get("_norm_known", "")
 
-        # 1. Exact match (nom + date)
+        # 1. Exact match (name + date)
         if (name, date) in exact_index:
             matched[sid] = (exact_index[(name, date)], "exact")
             continue
 
-        # 2. Fuzzy nom seul >= 95 (nom très similaire, date non requise)
+        # 2. Fuzzy name only >= 95 (very similar name, date not required)
         best_score     = 0.0
         best_candidate = None
         for candidate in target:
@@ -177,7 +178,7 @@ def match_players(source, target, source_key, target_key):
             matched[sid] = (best_candidate, "fuzzy_name")
             continue
 
-        # 3. Fuzzy nom + date : même date, seuil abaissé à 60
+        # 3. Fuzzy name + date: same date, lowered threshold to 45
         if date and date in date_index:
             best_score     = 0.0
             best_candidate = None
@@ -186,8 +187,32 @@ def match_players(source, target, source_key, target_key):
                 if score > best_score:
                     best_score     = score
                     best_candidate = candidate
-            if best_score >= 60 and best_candidate:
+            if best_score >= 45 and best_candidate:
                 matched[sid] = (best_candidate, "fuzzy_date")
+                continue
+
+        # 4. Alias + date: same DOB required, compare nickname variants >= 95
+        if date and date in date_index:
+            best_score     = 0.0
+            best_candidate = None
+            for candidate in date_index[date]:
+                alias_scores = []
+                # source known_name vs target full name
+                if known:
+                    alias_scores.append(name_similarity(known, candidate["_norm_name"]))
+                # source full name vs target short_name
+                tgt_short = candidate.get("_norm_short", "")
+                if tgt_short:
+                    alias_scores.append(name_similarity(name, tgt_short))
+                # source known_name vs target short_name
+                if known and tgt_short:
+                    alias_scores.append(name_similarity(known, tgt_short))
+                if alias_scores:
+                    score = max(alias_scores)
+                    if score > best_score:
+                        best_score, best_candidate = score, candidate
+            if best_score >= 95 and best_candidate:
+                matched[sid] = (best_candidate, "alias_date")
 
     return matched
 
@@ -197,10 +222,6 @@ def match_players(source, target, source_key, target_key):
 # -----------------------------------------------------------------------------
 
 def main():
-    print("=" * 60)
-    print("BUILD PLAYERS MAPPING")
-    print("=" * 60)
-
     sb_players = load_statsbomb()
     sc_players = load_skillcorner()
     tm_players = load_transfermarkt()
@@ -209,29 +230,20 @@ def main():
     sb_to_tm = match_players(sb_players, tm_players, "sb", "tm")
     sc_to_tm = match_players(sc_players, tm_players, "sc", "tm")
 
-    print(f"\nJoueurs par source :")
+    print(f"Players per source:")
     print(f"  StatsBomb    : {len(sb_players)}")
     print(f"  SkillCorner  : {len(sc_players)}")
     print(f"  Transfermarkt: {len(tm_players)}")
 
-    exact_sb_sc = sum(1 for m, method in sb_to_sc.values() if method == "exact")
-    fuzzy_sb_sc = sum(1 for m, method in sb_to_sc.values() if method == "fuzzy")
-    exact_sb_tm = sum(1 for m, method in sb_to_tm.values() if method == "exact")
-    fuzzy_sb_tm = sum(1 for m, method in sb_to_tm.values() if method == "fuzzy")
-
-    print(f"\nMatching SB <-> SC : {len(sb_to_sc)}/{len(sb_players)}  (exact: {exact_sb_sc}, fuzzy: {fuzzy_sb_sc})")
-    print(f"Matching SB <-> TM : {len(sb_to_tm)}/{len(sb_players)}  (exact: {exact_sb_tm}, fuzzy: {fuzzy_sb_tm})")
-    print(f"Matching SC <-> TM : {len(sc_to_tm)}/{len(sc_players)}")
-
-    # Construit les lignes
+    # Build rows
     rows    = []
     seen_sc = set()
     seen_tm = set()
 
     for sb in sb_players:
-        sb_id      = sb["sb_id"]
-        sc, _      = sb_to_sc.get(sb_id, (None, None))
-        tm, _      = sb_to_tm.get(sb_id, (None, None))
+        sb_id  = sb["sb_id"]
+        sc, _  = sb_to_sc.get(sb_id, (None, None))
+        tm, _  = sb_to_tm.get(sb_id, (None, None))
 
         if sc:
             seen_sc.add(sc["sc_id"])
@@ -242,12 +254,12 @@ def main():
             "sb_id":         sb_id,
             "sb_name":       sb["sb_name"],
             "sb_birth_date": sb["sb_birth_date"],
-            "sc_id":         sc["sc_id"]        if sc else "",
-            "sc_name":       sc["sc_name"]       if sc else "",
-            "sc_birth_date": sc["sc_birth_date"] if sc else "",
-            "tm_id":         tm["tm_id"]         if tm else "",
-            "tm_name":       tm["tm_name"]        if tm else "",
-            "tm_birth_date": tm["tm_birth_date"] if tm else "",
+            "sc_id":         sc["sc_id"]         if sc else "",
+            "sc_name":       sc["sc_name"]        if sc else "",
+            "sc_birth_date": sc["sc_birth_date"]  if sc else "",
+            "tm_id":         tm["tm_id"]          if tm else "",
+            "tm_name":       tm["tm_name"]         if tm else "",
+            "tm_birth_date": tm["tm_birth_date"]  if tm else "",
             "match_sb_sc":   "yes" if sc else "no",
             "match_sb_tm":   "yes" if tm else "no",
             "match_sc_tm":   "",
@@ -264,9 +276,9 @@ def main():
             "sc_id":         sc["sc_id"],
             "sc_name":       sc["sc_name"],
             "sc_birth_date": sc["sc_birth_date"],
-            "tm_id":         tm["tm_id"]         if tm else "",
-            "tm_name":       tm["tm_name"]        if tm else "",
-            "tm_birth_date": tm["tm_birth_date"] if tm else "",
+            "tm_id":         tm["tm_id"]          if tm else "",
+            "tm_name":       tm["tm_name"]         if tm else "",
+            "tm_birth_date": tm["tm_birth_date"]  if tm else "",
             "match_sb_sc": "no",
             "match_sb_tm": "no",
             "match_sc_tm": "yes" if tm else "no",
@@ -295,25 +307,25 @@ def main():
         writer.writeheader()
         writer.writerows(rows)
 
-    total     = len(rows)
-    all_three = sum(1 for r in rows if r["sb_id"] and r["sc_id"] and r["tm_id"])
-    sb_sc_only= sum(1 for r in rows if r["sb_id"] and r["sc_id"] and not r["tm_id"])
-    sb_tm_only= sum(1 for r in rows if r["sb_id"] and r["tm_id"] and not r["sc_id"])
-    sb_only   = sum(1 for r in rows if r["sb_id"] and not r["sc_id"] and not r["tm_id"])
-    sc_only   = sum(1 for r in rows if r["sc_id"] and not r["sb_id"] and not r["tm_id"])
-    tm_only   = sum(1 for r in rows if r["tm_id"] and not r["sb_id"] and not r["sc_id"])
+    total      = len(rows)
+    all_three  = sum(1 for r in rows if r["sb_id"] and r["sc_id"] and r["tm_id"])
+    sb_sc_only = sum(1 for r in rows if r["sb_id"] and r["sc_id"] and not r["tm_id"])
+    sb_tm_only = sum(1 for r in rows if r["sb_id"] and r["tm_id"] and not r["sc_id"])
+    sb_only    = sum(1 for r in rows if r["sb_id"] and not r["sc_id"] and not r["tm_id"])
+    sc_only    = sum(1 for r in rows if r["sc_id"] and not r["sb_id"] and not r["tm_id"])
+    tm_only    = sum(1 for r in rows if r["tm_id"] and not r["sb_id"] and not r["sc_id"])
 
     print("\n" + "=" * 60)
-    print("RÉSUMÉ")
+    print("SUMMARY")
     print("=" * 60)
-    print(f"Total lignes       : {total}")
+    print(f"Total rows         : {total}")
     print(f"SB + SC + TM       : {all_three}")
-    print(f"SB + SC seulement  : {sb_sc_only}")
-    print(f"SB + TM seulement  : {sb_tm_only}")
-    print(f"SB seul            : {sb_only}")
-    print(f"SC seul            : {sc_only}")
-    print(f"TM seul            : {tm_only}")
-    print(f"\nOutput : {OUTPUT_FILE}")
+    print(f"SB + SC only       : {sb_sc_only}")
+    print(f"SB + TM only       : {sb_tm_only}")
+    print(f"SB only            : {sb_only}")
+    print(f"SC only            : {sc_only}")
+    print(f"TM only            : {tm_only}")
+    print(f"\nOutput: {OUTPUT_FILE}")
     print("=" * 60)
 
 

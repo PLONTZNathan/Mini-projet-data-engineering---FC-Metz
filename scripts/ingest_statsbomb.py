@@ -8,9 +8,10 @@ USAGE
   Re-fetch everything:
       python ingest_statsbomb.py --all
 
-  Players + teams stats only:
+  Players + teams + matches stats only:
       python ingest_statsbomb.py --players
       python ingest_statsbomb.py --teams
+      python ingest_statsbomb.py --matches
 
   All lineups (resumable -- skips already downloaded):
       python ingest_statsbomb.py --lineups
@@ -29,10 +30,11 @@ WHAT EACH ARGUMENT COVERS
 --------------------------
   --players  → player_season_stats for the full season (one JSON file)
   --teams    → team_season_stats for the full season (one JSON file)
+  --matches  → fetches and saves the matches reference file for the season
   --lineups  → one JSON file per match (resumable, or forced with IDs)
   --events   → one JSON file per match via REST API (resumable, or forced with IDs)
                Uses direct REST calls to preserve nested objects (freeze frames, tactics)
-  --all      → equivalent to --players --teams --lineups --events (no IDs)
+  --all      → equivalent to --players --teams --matches --lineups --events (no IDs)
 """
 
 import os
@@ -183,7 +185,7 @@ def fetch_matches(competition_id, season_id):
     df = df[df["match_status"] == "available"].copy()
     df.reset_index(drop=True, inplace=True)
     save_json(MATCHES_JSON, json.loads(df.to_json(orient="records")))
-    print(f"[OK] {len(df)}/{total} matchs disponibles saved -> {MATCHES_JSON}")
+    print(f"[OK] {len(df)}/{total} available matches saved -> {MATCHES_JSON}")
     return df
 
 # -----------------------------------------------------------------------------
@@ -200,7 +202,7 @@ def fetch_lineups(matches_df, match_ids=None, limit=None):
     if match_ids:
         targets = matches_df[matches_df["match_id"].isin(match_ids)]
         if targets.empty:
-            print("[WARN] Aucun des match_ids fournis trouve dans les matchs disponibles")
+            print("[WARN] None of the provided match_ids found in available matches")
             return
     else:
         targets = matches_df
@@ -214,7 +216,7 @@ def fetch_lineups(matches_df, match_ids=None, limit=None):
     success = 0
     errors  = []
 
-    print(f"\nFetching lineups pour {total} matchs (force={force})...")
+    print(f"\nFetching lineups for {total} matches (force={force})...")
     print_separator("-", 60)
 
     start_total = time.time()
@@ -229,7 +231,7 @@ def fetch_lineups(matches_df, match_ids=None, limit=None):
         prefix = f"[{i:>3}/{total}] {match_date} {home} vs {away} (id={match_id})"
 
         if output_path.exists() and not force:
-            print(f"{prefix} -> SKIP (deja present)")
+            print(f"{prefix} -> SKIP (already in)")
             skipped += 1
             continue
 
@@ -254,7 +256,7 @@ def fetch_lineups(matches_df, match_ids=None, limit=None):
             time.sleep(0.3)
 
         except Exception as e:
-            print(f"{prefix} -> ERREUR : {e}")
+            print(f"{prefix} -> ERROR : {e}")
             errors.append({"match_id": match_id, "error": str(e)})
 
     _print_report("lineups", success, skipped, errors, time.time() - start_total, DIR_LINEUPS)
@@ -277,7 +279,7 @@ def fetch_events(matches_df, match_ids=None, limit=None):
     if match_ids:
         targets = matches_df[matches_df["match_id"].isin(match_ids)]
         if targets.empty:
-            print("[WARN] Aucun des match_ids fournis trouve dans les matchs disponibles")
+            print("[WARN] None of the provided match_ids found in available matches")
             return
     else:
         targets = matches_df
@@ -291,7 +293,7 @@ def fetch_events(matches_df, match_ids=None, limit=None):
     success = 0
     errors  = []
 
-    print(f"\nFetching events pour {total} matchs via REST API (force={force})...")
+    print(f"\nFetching events for {total} matches via REST API (force={force})...")
     print_separator("-", 60)
 
     start_total = time.time()
@@ -306,7 +308,7 @@ def fetch_events(matches_df, match_ids=None, limit=None):
         prefix = f"[{i:>3}/{total}] {match_date} {home} vs {away} (id={match_id})"
 
         if output_path.exists() and not force:
-            print(f"{prefix} -> SKIP (deja present)")
+            print(f"{prefix} -> SKIP (already in)")
             skipped += 1
             continue
 
@@ -325,7 +327,7 @@ def fetch_events(matches_df, match_ids=None, limit=None):
             time.sleep(0.5)
 
         except Exception as e:
-            print(f"{prefix} -> ERREUR : {e}")
+            print(f"{prefix} -> ERROR : {e}")
             errors.append({"match_id": match_id, "error": str(e)})
 
     _print_report("events", success, skipped, errors, time.time() - start_total, DIR_EVENTS)
@@ -340,18 +342,18 @@ def _print_report(label, success, skipped, errors, elapsed, output_dir):
     seconds = int(elapsed % 60)
 
     print_separator("-", 60)
-    print(f"\nRapport {label} :")
-    print(f"  Succes  : {success}")
+    print(f"\n{label} report:")
+    print(f"  Success : {success}")
     print(f"  Skipped : {skipped}")
-    print(f"  Erreurs : {len(errors)}")
-    print(f"  Temps   : {minutes}min {seconds}s")
+    print(f"  Errors  : {len(errors)}")
+    print(f"  Time    : {minutes}min {seconds}s")
 
     if errors:
         errors_path = output_dir / "fetch_errors.json"
         save_json(errors_path, errors)
-        print(f"  Erreurs sauvegardees -> {errors_path}")
+        print(f"  Errors saved -> {errors_path}")
 
-    print(f"\n[DONE] {label.capitalize()} dans {output_dir}")
+    print(f"\n[DONE] {label.capitalize()} saved in {output_dir}")
 
 
 # -----------------------------------------------------------------------------
@@ -367,6 +369,7 @@ Examples:
   python ingest_statsbomb.py --all
   python ingest_statsbomb.py --players
   python ingest_statsbomb.py --teams
+  python ingest_statsbomb.py --matches
   python ingest_statsbomb.py --lineups
   python ingest_statsbomb.py --events
   python ingest_statsbomb.py --lineups 3935583 3935584
@@ -378,7 +381,7 @@ Examples:
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Re-fetch players + teams + lineups + events"
+        help="Re-fetch players + teams + matches + lineups + events"
     )
     parser.add_argument(
         "--players",
@@ -389,6 +392,11 @@ Examples:
         "--teams",
         action="store_true",
         help="Re-fetch team season stats"
+    )
+    parser.add_argument(
+        "--matches",
+        action="store_true",
+        help="Re-fetch the matches reference file for the season"
     )
     parser.add_argument(
         "--lineups",
@@ -411,7 +419,7 @@ Examples:
 
     args = parser.parse_args()
 
-    if not any([args.all, args.players, args.teams,
+    if not any([args.all, args.players, args.teams, args.matches,
                 args.lineups is not None, args.events is not None]):
         parser.print_help()
         sys.exit(1)
@@ -433,13 +441,15 @@ def main():
     print_separator("=", 80)
 
     if args.all:
-        print("Mode   : ALL (players + teams + lineups + events)")
+        print("Mode   : ALL (players + teams + matches + lineups + events)")
     else:
         parts = []
         if args.players:
             parts.append("players")
         if args.teams:
             parts.append("teams")
+        if args.matches:
+            parts.append("matches")
         if args.lineups is not None:
             parts.append(f"lineups {args.lineups if args.lineups else '(all)'}")
         if args.events is not None:
@@ -469,8 +479,9 @@ def main():
         fetch_teams(competition_id, season_id)
         step_timings["teams"] = time.time() - t
 
-    # -- MATCHES (needed for lineups / events) ---------------------------------
-    needs_matches = args.all or args.lineups is not None or args.events is not None
+    # -- MATCHES ---------------------------------------------------------------
+    # Fetched standalone (--matches) OR when needed for lineups/events
+    needs_matches = args.all or args.matches or args.lineups is not None or args.events is not None
     if needs_matches:
         print_section("STEP: MATCHES")
         t = time.time()

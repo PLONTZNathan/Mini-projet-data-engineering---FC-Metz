@@ -14,7 +14,7 @@ USAGE
   All players (resumable — skips already scraped):
       python ingest_transfermarkt.py --players
 
-  Update specific players by Transfermarkt ID (need the player to be in the csv already, if not python ingest_transfermarkt.py --players):
+  Update specific players by Transfermarkt ID (re-scrapes team pages to get fresh data):
       python ingest_transfermarkt.py --players 12345 67890
 
   Test mode:
@@ -28,8 +28,9 @@ WHAT EACH ARGUMENT COVERS
   --players            → Step 1: scrapes player list (id, name, link) from all clubs.
                          Step 2: scrapes detailed stats for each player.
                          No IDs : resumable, skips already scraped players.
-                         With IDs : updates only those players in the CSV
-                                    (requires players file to exist first).
+                         With IDs : re-scrapes team pages to find each player,
+                                    then fetches fresh stats and updates the CSV.
+                         NOTE: if the teams file is missing, --teams is run automatically first.
 
   --all                → Deletes all files, then runs --teams then --players (full rescrape).
 """
@@ -42,7 +43,7 @@ import random
 import argparse
 import requests
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 from bs4 import BeautifulSoup
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -115,7 +116,7 @@ def fetch_url(url) -> Optional[str]:
 
 
 def extract_id(url: str) -> str:
-    """Extrait l'ID Transfermarkt depuis une URL /verein/ID/..."""
+    """Extracts the Transfermarkt ID from a /verein/ID/... URL"""
     m = re.search(r"/verein/(\d+)", url)
     return m.group(1) if m else ""
 
@@ -169,6 +170,17 @@ def get_team_links_from_csv() -> list:
     return links
 
 
+def ensure_teams_file():
+    """
+    If the teams file doesn't exist, automatically run --teams before continuing.
+    """
+    if not TEAMS_FILE.exists():
+        print("[INFO] Teams file not found — running --teams automatically first...")
+        print_separator("-", 80)
+        run_teams()
+        print_separator("-", 80)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # TEAMS SCRAPING
 # ─────────────────────────────────────────────────────────────────────────────
@@ -196,13 +208,13 @@ def scrape_teams() -> list:
 
         team_name = link_cell.a["title"]
         team_link = f"{BASE_URL}{link_cell.a['href']}"
-        id     = extract_id(team_link)
+        id        = extract_id(team_link)
 
         print(f"  Extracting details for {team_name} (id={id})...")
         details = _extract_team_details(team_link)
 
         teams.append({
-            "id":                 id,
+            "id":                    id,
             "team":                  team_name,
             "link":                  team_link,
             "league":                LEAGUE_CODE,
@@ -331,6 +343,63 @@ def get_all_player_stubs() -> list:
         random_delay(1, 2)
 
     return all_players
+
+
+def find_players_in_teams(target_ids: List[str]) -> Dict[str, dict]:
+    """
+    Browse all team pages and collect fresh stubs (id, name, link)
+    for the requested player IDs.
+    Stops early once all players are found.
+    Returns a dict {player_id: {"id": ..., "name": ..., "link": ...}}.
+    """
+    team_links = get_team_links_from_csv()
+    remaining  = set(target_ids)
+    found      = {}
+
+    print(f"  Searching {len(target_ids)} player(s) across {len(team_links)} team pages...")
+    print_separator("-", 80)
+
+    for team_url in team_links:
+        if not remaining:
+            break  # all players found, stop early
+
+        print(f"  Scanning {team_url} ...", end=" ")
+        html = fetch_url(team_url)
+        if not html:
+            print("[FAILED]")
+            continue
+
+        soup  = BeautifulSoup(html, "html.parser")
+        table = soup.find("table", class_="items")
+        if not table:
+            print("[NO TABLE]")
+            continue
+
+        hits = 0
+        for row in table.find("tbody").find_all("tr", recursive=False):
+            cell = row.find("td", class_="hauptlink")
+            if not (cell and cell.a):
+                continue
+            href = cell.a["href"]
+            pid  = href.split("/")[-1]
+            if pid in remaining:
+                found[pid] = {
+                    "id":   pid,
+                    "name": cell.a.text.strip(),
+                    "link": f"{BASE_URL}{href}",
+                }
+                remaining.discard(pid)
+                hits += 1
+
+        print(f"[{hits} hit(s)]")
+        random_delay(1, 2)
+
+    print_separator("-", 80)
+
+    if remaining:
+        print(f"[WARN] {len(remaining)} player(s) not found in any team page: {remaining}")
+
+    return found
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -537,53 +606,42 @@ def run_players(player_ids=None, limit=None):
     """
     Scrape player data.
     - player_ids=None : resumable full scrape (skips already scraped)
-    - player_ids=[...]: update only those specific players in the CSV
+    - player_ids=[...]: re-scrapes team pages to find fresh stubs for each ID,
+                        then fetches stats and updates the CSV
     """
     print_section("STEP: PLAYERS")
     t0 = time.time()
 
     if player_ids:
+        # ── UPDATE MODE: re-scrape team pages to find fresh player stubs ─────
         print(f"Targeting {len(player_ids)} specific player(s) — update mode")
+        print(f"Browsing team pages to find fresh data for each player...")
         print_separator("-", 80)
 
-        if not PLAYERS_FILE.exists():
-            print("[ERROR] Players file not found.")
-            print("        Run --players first to build the full players file.")
+        ensure_teams_file()
+
+        # Browse all team pages to get fresh stubs for requested IDs
+        fresh_stubs = find_players_in_teams(player_ids)
+
+        if not fresh_stubs:
+            print("\n[ABORT] No requested players found in any team page.")
             return
 
-        existing = load_csv_as_dict(PLAYERS_FILE, "id")
+        # Load existing CSV (create empty structure if missing)
+        existing = load_csv_as_dict(PLAYERS_FILE, "id") if PLAYERS_FILE.exists() else {}
 
-        stubs     = []
-        not_found = []
-        for pid in player_ids:
-            if pid in existing:
-                stubs.append({
-                    "id":   pid,
-                    "name": existing[pid]["name"],
-                    "link": existing[pid]["link"],
-                })
-            else:
-                not_found.append(pid)
+        print(f"\nScraping detailed stats for {len(fresh_stubs)} found player(s)...")
+        print_separator("-", 80)
 
-        if not_found:
-            print(f"\n[NOT FOUND] The following ID(s) do not exist in {PLAYERS_FILE.name}:")
-            for pid in not_found:
-                print(f"  - {pid}")
-            print(f"\n  Tip: run --players (no IDs) first to populate the full players file,")
-            print(f"       then retry with these IDs.")
+        ok        = 0
+        fail      = 0
+        not_found_ids = set(player_ids) - set(fresh_stubs.keys())
 
-        if not stubs:
-            print("\n[ABORT] No valid IDs to update.")
-            return
-
-        print(f"\nProceeding with {len(stubs)} valid player(s)...\n")
-
-        ok = fail = 0
-        for i, stub in enumerate(stubs, 1):
-            print(f"  [{i}/{len(stubs)}] {stub['name']} (ID: {stub['id']})...", end=" ")
+        for i, (pid, stub) in enumerate(fresh_stubs.items(), 1):
+            print(f"  [{i}/{len(fresh_stubs)}] {stub['name']} (ID: {pid})...", end=" ")
             data = scrape_player_details(stub["id"], stub["name"], stub["link"])
             if data:
-                existing[stub["id"]] = {k: data.get(k, "") for k in PLAYER_FIELDNAMES}
+                existing[pid] = {k: data.get(k, "") for k in PLAYER_FIELDNAMES}
                 print("[OK - UPDATED]")
                 ok += 1
             else:
@@ -591,22 +649,27 @@ def run_players(player_ids=None, limit=None):
                 fail += 1
             random_delay(2, 3)
 
+        # Rewrite the full CSV with updated rows
         write_csv(PLAYERS_FILE, list(existing.values()), PLAYER_FIELDNAMES)
 
         elapsed = time.time() - t0
         print_separator("=", 80)
         print("PLAYERS UPDATE SUMMARY")
         print_separator("=", 80)
-        print(f"IDs requested    : {len(player_ids)}")
-        print(f"  Found          : {len(stubs)}")
-        print(f"  Not found      : {len(not_found)}")
-        print(f"  Updated        : {ok}")
-        print(f"  Failed         : {fail}")
-        print(f"Output           : {PLAYERS_FILE}")
-        print(f"Duration         : {elapsed:.2f}s ({elapsed/60:.2f} min)")
+        print(f"IDs requested          : {len(player_ids)}")
+        print(f"  Found on team pages  : {len(fresh_stubs)}")
+        print(f"  Not found            : {len(not_found_ids)}"
+              + (f"  {not_found_ids}" if not_found_ids else ""))
+        print(f"  Updated successfully : {ok}")
+        print(f"  Failed               : {fail}")
+        print(f"Output                 : {PLAYERS_FILE}")
+        print(f"Duration               : {elapsed:.2f}s ({elapsed/60:.2f} min)")
         print_separator("=", 80)
 
     else:
+        # ── FULL / RESUMABLE MODE ─────────────────────────────────────────────
+        ensure_teams_file()
+
         already_scraped = set()
         if PLAYERS_FILE.exists():
             with open(PLAYERS_FILE, "r", encoding="utf-8") as f:

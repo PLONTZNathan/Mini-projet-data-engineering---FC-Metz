@@ -31,8 +31,8 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
 
-SB_TEAMS_JSON = ROOT / "data" / "raw" / "statsbomb"    / "teams" / "ligue1_teams_2025_2026.json"
-SC_TEAMS_JSON = ROOT / "data" / "raw" / "skillcorner"  / "teams" / "ligue1_teams_2025_2026.json"
+SB_TEAMS_JSON = ROOT / "data" / "raw" / "statsbomb"     / "teams" / "ligue1_teams_2025_2026.json"
+SC_TEAMS_JSON = ROOT / "data" / "raw" / "skillcorner"   / "teams" / "ligue1_teams_2025_2026.json"
 TM_TEAMS_CSV  = ROOT / "data" / "raw" / "transfermarkt" / "ligue1_teams_2025_2026.csv"
 
 OUTPUT_DIR  = ROOT / "data" / "raw" / "mapping"
@@ -42,8 +42,7 @@ OUTPUT_FILE = OUTPUT_DIR / "teams_mapping.csv"
 FIELDNAMES = [
     "sb_id", "sb_name",
     "sc_id", "sc_name",
-    "tm_id",
-    "score_sc_tm", "score_sb_best",
+    "tm_id", "tm_name",
 ]
 
 # -----------------------------------------------------------------------------
@@ -145,34 +144,32 @@ def main():
     sc_teams = load_skillcorner()
     tm_teams = load_transfermarkt()
 
-    # Step 1: SC <-> TM bijective matching
+    # Step 1: SC - TM bijective matching
     sc_tm_matches = bijective_match(sc_teams, tm_teams, fuzzy_score)
 
     pairs = []
     for sc, tm, sc_tm_score in sc_tm_matches:
         pairs.append({
-            "sc_id":       sc["sc_id"],
-            "sc_name":     sc["sc_name"],
-            "tm_id":       tm["tm_id"],
-            "tm_name":     tm["tm_name"],
-            "score_sc_tm": sc_tm_score,
-            "_norm":       sc["_norm"] + " " + tm["_norm"],
+            "sc_id":   sc["sc_id"],
+            "sc_name": sc["sc_name"],
+            "tm_id":   tm["tm_id"],
+            "tm_name": tm["tm_name"],
+            "_norm":   sc["_norm"] + " " + tm["_norm"],
         })
 
-    # Step 2: SB <-> SC/TM pairs bijective matching
+    # Step 2: SB - SC/TM pairs bijective matching
     sb_pair_matches = bijective_match(sb_teams, pairs, fuzzy_score)
 
     rows = sorted([
         {
-            "sb_id":         sb["sb_id"],
-            "sb_name":       sb["sb_name"],
-            "sc_id":         pair["sc_id"],
-            "sc_name":       pair["sc_name"],
-            "tm_id":         pair["tm_id"],
-            "score_sc_tm":   pair["score_sc_tm"],
-            "score_sb_best": sb_score,
+            "sb_id":   sb["sb_id"],
+            "sb_name": sb["sb_name"],
+            "sc_id":   pair["sc_id"],
+            "sc_name": pair["sc_name"],
+            "tm_id":   pair["tm_id"],
+            "tm_name": pair["tm_name"],
         }
-        for sb, pair, sb_score in sb_pair_matches
+        for sb, pair, _ in sb_pair_matches
     ], key=lambda r: r["sb_id"])
 
     # Write CSV
@@ -182,10 +179,14 @@ def main():
         writer.writerows(rows)
 
     # Display
-    print(f"\n{'Club':<30} {'SB ID':>6}  {'SC ID':>6}  {'TM ID':>6}")
-    print("-" * 55)
+    print(f"\n{'SB Name':<25} {'SB ID':>6}  {'SC Name':<28}  {'SC ID':>6}  {'TM Name':<28}  {'TM ID':>6}")
+    print("-" * 100)
     for r in rows:
-        print(f"{r['sc_name']:<30} {str(r['sb_id']):>6}  {str(r['sc_id']):>6}  {str(r['tm_id']):>6}")
+        print(
+            f"{r['sb_name']:<25} {str(r['sb_id']):>6}  "
+            f"{r['sc_name']:<28}  {str(r['sc_id']):>6}  "
+            f"{r['tm_name']:<28}  {str(r['tm_id']):>6}"
+        )
 
     print(f"\nOutput : {OUTPUT_FILE}")
     print("=" * 60)
