@@ -295,10 +295,76 @@ def process_matches():
 
 
 # ============================================================
-# MAIN
+# LINEUPS  (match_players join table)
 # ============================================================
+
+def process_match_players():
+    matches_mapping = pd.read_csv(os.path.join(RAW, "mapping", "matches_mapping.csv"))
+    players_mapping = pd.read_csv(os.path.join(RAW, "mapping", "players_mapping.csv"))
+
+    # Build lookups
+    # SkillCorner match sc_id -> our internal match id
+    sc_match_lookup = dict(zip(matches_mapping["sc_id"], matches_mapping["id"]))
+    # SkillCorner player sc_id -> our internal player id
+    sc_player_lookup = dict(zip(players_mapping["sc_id"], players_mapping["id"]))
+
+    rows = []
+
+    for sc_match_id, match_id in sc_match_lookup.items():
+        path = os.path.join(RAW, "skillcorner", "matches", f"match_{sc_match_id}.json")
+        if not os.path.exists(path):
+            continue
+
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+
+        home_sc_team_id = data.get("home_team", {}).get("id")
+
+        for player in data.get("players", []):
+            sc_player_id = player.get("id")
+
+            # Extract position info from player_role
+            role = player.get("player_role", {})
+
+            # Extract minutes played from playing_time
+            # total can be null for unused substitutes, default to 0
+            playing_time   = player.get("playing_time") or {}
+            total          = playing_time.get("total") or {}
+            minutes_played = total.get("minutes_played", 0)
+
+            # Extract minutes by period, default to 0 if period not present
+            period_1_minutes = 0
+            period_2_minutes = 0
+            for period in playing_time.get("by_period") or []:
+                if period.get("name") == "period_1":
+                    period_1_minutes = period.get("minutes_played")
+                elif period.get("name") == "period_2":
+                    period_2_minutes = period.get("minutes_played")
+
+            rows.append({
+                "match_id":        match_id,
+                "player_id":       sc_player_lookup.get(sc_player_id),
+                "is_home_player":  player.get("team_id") == home_sc_team_id,
+                "position_group":  role.get("position_group"),
+                "position":        role.get("name"),
+                "shirt_number":    player.get("number"),
+                "start_time":      player.get("start_time"),
+                "end_time":        player.get("end_time"),
+                "minutes_played":  minutes_played,
+                "period_1_minutes": period_1_minutes,
+                "period_2_minutes": period_2_minutes,
+                "goals":           player.get("goal"),
+                "own_goals":       player.get("own_goal"),
+                "yellow_cards":    player.get("yellow_card"),
+                "red_cards":       player.get("red_card"),
+                "injured":         player.get("injured"),
+            })
+
+    result = pd.DataFrame(rows)
+    save_csv(result, "match_players")
 
 if __name__ == "__main__":
     process_teams()
     process_players()
     process_matches()
+    process_match_players()
