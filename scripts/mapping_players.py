@@ -28,13 +28,14 @@ ROOT = Path(__file__).resolve().parent.parent
 
 SB_PLAYERS_JSON = ROOT / "data" / "raw" / "statsbomb"    / "players" / "ligue1_players_2025_2026.json"
 SC_PLAYERS_JSON = ROOT / "data" / "raw" / "skillcorner"  / "players" / "ligue1_players_2025_2026.json"
-TM_PLAYERS_CSV  = ROOT / "data" / "raw" / "transfermarkt" / "ligue1_players_2025_2026_complete.csv"
+TM_PLAYERS_CSV  = ROOT / "data" / "raw" / "transfermarkt" / "ligue1_players_2025_2026.csv"
 
 OUTPUT_DIR = ROOT / "data" / "raw" / "mapping"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_FILE = OUTPUT_DIR / "players_mapping.csv"
 
 FIELDNAMES = [
+    "id",
     "sb_id",  "sb_name",  "sb_birth_date",
     "sc_id",  "sc_name",  "sc_birth_date",
     "tm_id",  "tm_name",  "tm_birth_date",
@@ -81,7 +82,7 @@ def load_statsbomb():
             "sb_name":       p.get("player_name", ""),
             "sb_birth_date": normalize_date(p.get("birth_date", "")),
             "_norm_name":    normalize_name(p.get("player_name", "")),
-            "_norm_known":   normalize_name(p.get("player_known_name", "")),  # e.g. "Marquinhos"
+            "_norm_known":   normalize_name(p.get("player_known_name", "")),
         })
     return players
 
@@ -97,7 +98,7 @@ def load_skillcorner():
             "sc_name":       p.get("short_name", full_name),
             "sc_birth_date": normalize_date(p.get("birthday", "")),
             "_norm_name":    normalize_name(full_name),
-            "_norm_short":   normalize_name(p.get("short_name", "")),  # e.g. "Marquinhos"
+            "_norm_short":   normalize_name(p.get("short_name", "")),
         })
     return players
 
@@ -120,15 +121,6 @@ def load_transfermarkt():
 # -----------------------------------------------------------------------------
 
 def name_similarity(a: str, b: str) -> int:
-    """
-    Similarity between two names using rapidfuzz (Levenshtein distance).
-    - token_sort_ratio : order-insensitive
-    - token_set_ratio  : insensitive to extra tokens (long compound names)
-    We take the max of both to cover:
-      "angel gomes" vs "adilson angel abreu de almeida gomes"  -> high token_set_ratio
-      "pierre lees melou" vs "pierre lees-melou"               -> high token_sort_ratio
-    Returns a score between 0 and 100.
-    """
     return max(
         fuzz.token_sort_ratio(a, b),
         fuzz.token_set_ratio(a, b)
@@ -136,13 +128,6 @@ def name_similarity(a: str, b: str) -> int:
 
 
 def match_players(source, target, source_key, target_key):
-    """
-    1. Exact match on (normalized name, date of birth)
-    2. Fuzzy name only >= 95 : very similar name without date check
-    3. Fuzzy name + date     : same date of birth + name score >= 45
-    4. Alias + date          : same date of birth, nickname variants >= 95
-    Returns a dict {source_id: (target_player, method)}.
-    """
     exact_index = {}
     for p in target:
         key = (p["_norm_name"], p[f"{target_key}_birth_date"])
@@ -156,9 +141,9 @@ def match_players(source, target, source_key, target_key):
 
     matched = {}
     for p in source:
-        sid  = p[f"{source_key}_id"]
-        name = p["_norm_name"]
-        date = p[f"{source_key}_birth_date"]
+        sid   = p[f"{source_key}_id"]
+        name  = p["_norm_name"]
+        date  = p[f"{source_key}_birth_date"]
         known = p.get("_norm_known", "")
 
         # 1. Exact match (name + date)
@@ -166,7 +151,7 @@ def match_players(source, target, source_key, target_key):
             matched[sid] = (exact_index[(name, date)], "exact")
             continue
 
-        # 2. Fuzzy name only >= 95 (very similar name, date not required)
+        # 2. Fuzzy name only >= 95
         best_score     = 0.0
         best_candidate = None
         for candidate in target:
@@ -178,7 +163,7 @@ def match_players(source, target, source_key, target_key):
             matched[sid] = (best_candidate, "fuzzy_name")
             continue
 
-        # 3. Fuzzy name + date: same date, lowered threshold to 45
+        # 3. Fuzzy name + date: same date, threshold >= 45
         if date and date in date_index:
             best_score     = 0.0
             best_candidate = None
@@ -191,20 +176,17 @@ def match_players(source, target, source_key, target_key):
                 matched[sid] = (best_candidate, "fuzzy_date")
                 continue
 
-        # 4. Alias + date: same DOB required, compare nickname variants >= 95
+        # 4. Alias + date: same DOB, nickname variants >= 95
         if date and date in date_index:
             best_score     = 0.0
             best_candidate = None
             for candidate in date_index[date]:
                 alias_scores = []
-                # source known_name vs target full name
                 if known:
                     alias_scores.append(name_similarity(known, candidate["_norm_name"]))
-                # source full name vs target short_name
                 tgt_short = candidate.get("_norm_short", "")
                 if tgt_short:
                     alias_scores.append(name_similarity(name, tgt_short))
-                # source known_name vs target short_name
                 if known and tgt_short:
                     alias_scores.append(name_similarity(known, tgt_short))
                 if alias_scores:
@@ -251,6 +233,7 @@ def main():
             seen_tm.add(tm["tm_id"])
 
         rows.append({
+            "id":            len(rows) + 1,
             "sb_id":         sb_id,
             "sb_name":       sb["sb_name"],
             "sb_birth_date": sb["sb_birth_date"],
@@ -272,6 +255,7 @@ def main():
         if tm:
             seen_tm.add(tm["tm_id"])
         rows.append({
+            "id":            len(rows) + 1,
             "sb_id": "", "sb_name": "", "sb_birth_date": "",
             "sc_id":         sc["sc_id"],
             "sc_name":       sc["sc_name"],
@@ -288,6 +272,7 @@ def main():
         if tm["tm_id"] in seen_tm:
             continue
         rows.append({
+            "id":            len(rows) + 1,
             "sb_id": "", "sb_name": "", "sb_birth_date": "",
             "sc_id": "", "sc_name": "", "sc_birth_date": "",
             "tm_id":         tm["tm_id"],

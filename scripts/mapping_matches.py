@@ -34,7 +34,7 @@ OUTPUT_DIR  = ROOT / "data" / "raw" / "mapping"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_FILE = OUTPUT_DIR / "matches_mapping.csv"
 
-FIELDNAMES = ["sb_id", "sc_id", "date"]
+FIELDNAMES = ["id", "sb_id", "sc_id", "date"]
 
 # -----------------------------------------------------------------------------
 # LOADERS
@@ -121,6 +121,7 @@ def main():
             continue
 
         rows.append({
+            "id":    len(rows) + 1,
             "sb_id": sb_match_id,
             "sc_id": sc_match["id"],
             "date":  date,
@@ -133,10 +134,10 @@ def main():
         writer.writerows(rows)
 
     # Display
-    print(f"\n{'SB ID':<12} {'SC ID':<12} {'Date'}")
-    print("-" * 38)
+    print(f"\n{'ID':<6} {'SB ID':<12} {'SC ID':<12} {'Date'}")
+    print("-" * 44)
     for r in rows:
-        print(f"{str(r['sb_id']):<12} {str(r['sc_id']):<12} {r['date']}")
+        print(f"{str(r['id']):<6} {str(r['sb_id']):<12} {str(r['sc_id']):<12} {r['date']}")
 
     print(f"\nMatches mapped   : {len(rows)}/{len(sb_matches)}")
     if not_found:

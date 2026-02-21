@@ -155,7 +155,7 @@ def parse_args(argv: list[str]) -> dict:
         elif token == "--mapping":
             i += 1
 
-            # --mapping alone or --mapping --all → all targets
+            # --mapping alone or --mapping --all -> all targets
             if i >= len(argv) or argv[i].startswith("--"):
                 targets = ALL_MAPPING_TARGETS
             else:

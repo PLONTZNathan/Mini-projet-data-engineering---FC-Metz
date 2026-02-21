@@ -13,14 +13,10 @@ USAGE
       python ingest_statsbomb.py --teams
       python ingest_statsbomb.py --matches
 
-  All lineups (resumable -- skips already downloaded):
-      python ingest_statsbomb.py --lineups
-
   All events (resumable -- skips already downloaded):
       python ingest_statsbomb.py --events
 
   Specific matches (force re-download):
-      python ingest_statsbomb.py --lineups 3935583 3935584
       python ingest_statsbomb.py --events 3935583 3935584
 
   Test mode (limit number of matches):
@@ -28,13 +24,12 @@ USAGE
 
 WHAT EACH ARGUMENT COVERS
 --------------------------
-  --players  → player_season_stats for the full season (one JSON file)
-  --teams    → team_season_stats for the full season (one JSON file)
-  --matches  → fetches and saves the matches reference file for the season
-  --lineups  → one JSON file per match (resumable, or forced with IDs)
-  --events   → one JSON file per match via REST API (resumable, or forced with IDs)
+  --players  -> player_season_stats for the full season (one JSON file)
+  --teams    -> team_season_stats for the full season (one JSON file)
+  --matches  -> fetches and saves the matches reference file for the season
+  --events   -> one JSON file per match via REST API (resumable, or forced with IDs)
                Uses direct REST calls to preserve nested objects (freeze frames, tactics)
-  --all      → equivalent to --players --teams --matches --lineups --events (no IDs)
+  --all      -> equivalent to --players --teams --matches --events (no IDs)
 """
 
 import os
@@ -67,7 +62,6 @@ DIR_PLAYERS = DATA_DIR / "players"
 DIR_TEAMS   = DATA_DIR / "teams"
 DIR_MATCHES = DATA_DIR / "matches"
 DIR_EVENTS  = DATA_DIR / "events"
-DIR_LINEUPS = DATA_DIR / "lineups"
 
 PLAYERS_JSON = DIR_PLAYERS / "ligue1_players_2025_2026.json"
 TEAMS_JSON   = DIR_TEAMS   / "ligue1_teams_2025_2026.json"
@@ -80,7 +74,7 @@ STATSBOMB_API = "https://data.statsbombservices.com/api"
 # -----------------------------------------------------------------------------
 
 def create_dirs():
-    for d in [DIR_PLAYERS, DIR_TEAMS, DIR_MATCHES, DIR_EVENTS, DIR_LINEUPS]:
+    for d in [DIR_PLAYERS, DIR_TEAMS, DIR_MATCHES, DIR_EVENTS]:
         d.mkdir(parents=True, exist_ok=True)
 
 
@@ -187,80 +181,6 @@ def fetch_matches(competition_id, season_id):
     save_json(MATCHES_JSON, json.loads(df.to_json(orient="records")))
     print(f"[OK] {len(df)}/{total} available matches saved -> {MATCHES_JSON}")
     return df
-
-# -----------------------------------------------------------------------------
-# LINEUPS
-# -----------------------------------------------------------------------------
-
-def fetch_lineups(matches_df, match_ids=None, limit=None):
-    """
-    match_ids=None  : resumable, skips existing files
-    match_ids=[...] : force re-download for those specific IDs
-    """
-    force = match_ids is not None
-
-    if match_ids:
-        targets = matches_df[matches_df["match_id"].isin(match_ids)]
-        if targets.empty:
-            print("[WARN] None of the provided match_ids found in available matches")
-            return
-    else:
-        targets = matches_df
-
-    if limit:
-        targets = targets.head(limit)
-        print(f"[TEST MODE] Limited to first {limit} matches")
-
-    total   = len(targets)
-    skipped = 0
-    success = 0
-    errors  = []
-
-    print(f"\nFetching lineups for {total} matches (force={force})...")
-    print_separator("-", 60)
-
-    start_total = time.time()
-
-    for i, (_, match) in enumerate(targets.iterrows(), start=1):
-        match_id    = int(match["match_id"])
-        home        = match.get("home_team", "?")
-        away        = match.get("away_team", "?")
-        match_date  = match.get("match_date", "?")
-        output_path = DIR_LINEUPS / f"match_{match_id}_lineups.json"
-
-        prefix = f"[{i:>3}/{total}] {match_date} {home} vs {away} (id={match_id})"
-
-        if output_path.exists() and not force:
-            print(f"{prefix} -> SKIP (already in)")
-            skipped += 1
-            continue
-
-        try:
-            start = time.time()
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                lineups = sb.lineups(match_id=match_id, creds=CREDS)
-
-            lineups_data = []
-            for team_name, df in lineups.items():
-                lineups_data.append({
-                    "team_name": team_name,
-                    "lineup": json.loads(df.to_json(orient="records"))
-                })
-
-            save_json(output_path, lineups_data)
-            elapsed = time.time() - start
-            nb_joueurs = sum(len(t["lineup"]) for t in lineups_data)
-            print(f"{prefix} -> OK ({nb_joueurs} joueurs, {elapsed:.1f}s)")
-            success += 1
-            time.sleep(0.3)
-
-        except Exception as e:
-            print(f"{prefix} -> ERROR : {e}")
-            errors.append({"match_id": match_id, "error": str(e)})
-
-    _print_report("lineups", success, skipped, errors, time.time() - start_total, DIR_LINEUPS)
-
 
 # -----------------------------------------------------------------------------
 # EVENTS  (direct REST API to preserve nested JSON objects)
@@ -370,9 +290,7 @@ Examples:
   python ingest_statsbomb.py --players
   python ingest_statsbomb.py --teams
   python ingest_statsbomb.py --matches
-  python ingest_statsbomb.py --lineups
   python ingest_statsbomb.py --events
-  python ingest_statsbomb.py --lineups 3935583 3935584
   python ingest_statsbomb.py --events 3935583 3935584
   python ingest_statsbomb.py --all --limit 5
         """
@@ -381,7 +299,7 @@ Examples:
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Re-fetch players + teams + matches + lineups + events"
+        help="Re-fetch players + teams + matches + events"
     )
     parser.add_argument(
         "--players",
@@ -399,12 +317,6 @@ Examples:
         help="Re-fetch the matches reference file for the season"
     )
     parser.add_argument(
-        "--lineups",
-        nargs="*",
-        metavar="MATCH_ID",
-        help="Fetch lineups. No ID = resumable. With IDs = force re-download."
-    )
-    parser.add_argument(
         "--events",
         nargs="*",
         metavar="MATCH_ID",
@@ -420,7 +332,7 @@ Examples:
     args = parser.parse_args()
 
     if not any([args.all, args.players, args.teams, args.matches,
-                args.lineups is not None, args.events is not None]):
+                args.events is not None]):
         parser.print_help()
         sys.exit(1)
 
@@ -441,7 +353,7 @@ def main():
     print_separator("=", 80)
 
     if args.all:
-        print("Mode   : ALL (players + teams + matches + lineups + events)")
+        print("Mode   : ALL (players + teams + matches + events)")
     else:
         parts = []
         if args.players:
@@ -450,8 +362,6 @@ def main():
             parts.append("teams")
         if args.matches:
             parts.append("matches")
-        if args.lineups is not None:
-            parts.append(f"lineups {args.lineups if args.lineups else '(all)'}")
         if args.events is not None:
             parts.append(f"events {args.events if args.events else '(all)'}")
         print(f"Mode   : {' | '.join(parts)}")
@@ -480,21 +390,13 @@ def main():
         step_timings["teams"] = time.time() - t
 
     # -- MATCHES ---------------------------------------------------------------
-    # Fetched standalone (--matches) OR when needed for lineups/events
-    needs_matches = args.all or args.matches or args.lineups is not None or args.events is not None
+    # Fetched standalone (--matches) OR when needed for events
+    needs_matches = args.all or args.matches or args.events is not None
     if needs_matches:
         print_section("STEP: MATCHES")
         t = time.time()
         matches_df = fetch_matches(competition_id, season_id)
         step_timings["matches"] = time.time() - t
-
-    # -- LINEUPS ---------------------------------------------------------------
-    if args.all or args.lineups is not None:
-        print_section("STEP: LINEUPS")
-        t = time.time()
-        match_ids = [int(x) for x in args.lineups] if args.lineups else None
-        fetch_lineups(matches_df, match_ids=match_ids, limit=args.limit)
-        step_timings["lineups"] = time.time() - t
 
     # -- EVENTS ----------------------------------------------------------------
     if args.all or args.events is not None:

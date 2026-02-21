@@ -40,6 +40,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_FILE = OUTPUT_DIR / "teams_mapping.csv"
 
 FIELDNAMES = [
+    "id",
     "sb_id", "sb_name",
     "sc_id", "sc_name",
     "tm_id", "tm_name",
@@ -172,6 +173,10 @@ def main():
         for sb, pair, _ in sb_pair_matches
     ], key=lambda r: r["sb_id"])
 
+    # Assign internal id starting from 1, after sorting by sb_id
+    for i, row in enumerate(rows, start=1):
+        row["id"] = i
+
     # Write CSV
     with open(OUTPUT_FILE, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
@@ -179,10 +184,11 @@ def main():
         writer.writerows(rows)
 
     # Display
-    print(f"\n{'SB Name':<25} {'SB ID':>6}  {'SC Name':<28}  {'SC ID':>6}  {'TM Name':<28}  {'TM ID':>6}")
-    print("-" * 100)
+    print(f"\n{'ID':>4}  {'SB Name':<25} {'SB ID':>6}  {'SC Name':<28}  {'SC ID':>6}  {'TM Name':<28}  {'TM ID':>6}")
+    print("-" * 110)
     for r in rows:
         print(
+            f"{str(r['id']):>4}  "
             f"{r['sb_name']:<25} {str(r['sb_id']):>6}  "
             f"{r['sc_name']:<28}  {str(r['sc_id']):>6}  "
             f"{r['tm_name']:<28}  {str(r['tm_id']):>6}"

@@ -31,18 +31,18 @@ USAGE
 
 WHAT EACH ARGUMENT COVERS
 ──────────────────────────
-  --players  → players reference JSON + physical
+  --players  -> players reference JSON + physical
                No IDs  : all players (overwrites existing files)
                With IDs: only those players (overwrites)
 
-  --teams    → teams reference JSON
+  --teams    -> teams reference JSON
                No IDs  : all teams
 
-  --matches  → matches reference JSON
+  --matches  -> matches reference JSON
                No IDs  : all matches, SKIP if file already exists
                With IDs: only those matches, FORCE re-download
 
-  --all      → equivalent to --players --teams --matches (no IDs)
+  --all      -> equivalent to --players --teams --matches (no IDs)
 """
 
 import os
@@ -190,7 +190,7 @@ def refresh_players_ref(edition_id):
         {"competition_edition": edition_id}
     )
     save_json(PLAYERS_JSON, players)
-    print(f"[OK] {len(players)} players saved → {PLAYERS_JSON}")
+    print(f"[OK] {len(players)} players saved -> {PLAYERS_JSON}")
     return players
 
 
@@ -201,7 +201,7 @@ def refresh_teams_ref(edition_id):
         {"competition_edition": edition_id}
     )
     save_json(TEAMS_JSON, teams)
-    print(f"[OK] {len(teams)} teams saved → {TEAMS_JSON}")
+    print(f"[OK] {len(teams)} teams saved -> {TEAMS_JSON}")
 
     print(f"\nTEAMS LIST:")
     print_separator("-", 60)
@@ -221,7 +221,7 @@ def refresh_matches_ref(edition_id):
         {"competition_edition": edition_id, "user": "true"}
     )
     save_json(MATCHES_JSON, matches)
-    print(f"[OK] {len(matches)} matches saved → {MATCHES_JSON}")
+    print(f"[OK] {len(matches)} matches saved -> {MATCHES_JSON}")
     return matches
 
 
@@ -500,7 +500,7 @@ def main():
         all_matches = refresh_matches_ref(edition_id)
 
         if args.matches:
-            # Explicit IDs → force re-download
+            # Explicit IDs -> force re-download
             ids     = {int(x) for x in args.matches}
             targets = [m for m in all_matches if m["id"] in ids]
             missing = ids - {m["id"] for m in targets}

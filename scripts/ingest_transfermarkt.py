@@ -22,17 +22,17 @@ USAGE
 
 WHAT EACH ARGUMENT COVERS
 ──────────────────────────
-  --teams              → Scrapes league page, extracts all clubs with details.
+  --teams              -> Scrapes league page, extracts all clubs with details.
                          Deletes existing teams file and recreates it.
 
-  --players            → Step 1: scrapes player list (id, name, link) from all clubs.
+  --players            -> Step 1: scrapes player list (id, name, link) from all clubs.
                          Step 2: scrapes detailed stats for each player.
                          No IDs : resumable, skips already scraped players.
                          With IDs : re-scrapes team pages to find each player,
                                     then fetches fresh stats and updates the CSV.
                          NOTE: if the teams file is missing, --teams is run automatically first.
 
-  --all                → Deletes all files, then runs --teams then --players (full rescrape).
+  --all                -> Deletes all files, then runs --teams then --players (full rescrape).
 """
 
 import re
@@ -60,7 +60,7 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # File names in season_season+1 format
 TEAMS_FILE   = DATA_DIR / f"ligue1_teams_{SEASON_ID}_{SEASON_ID + 1}.csv"
-PLAYERS_FILE = DATA_DIR / f"ligue1_players_{SEASON_ID}_{SEASON_ID + 1}_complete.csv"
+PLAYERS_FILE = DATA_DIR / f"ligue1_players_{SEASON_ID}_{SEASON_ID + 1}.csv"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
