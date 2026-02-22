@@ -1,246 +1,150 @@
 # Script : create_database.py
-# Location : scripts/create_database.py
+# Location : database/create_database.py
 #
 # Creates all tables in the fc_metz PostgreSQL database.
-# Imports the connection from db_connection.py.
+# Dynamic stat columns (team_season_*, player_season_*) are inferred
+# directly from the processed CSV headers so the script never goes out of sync.
+# Drops all existing tables first before recreating them.
 #
 # Usage:
-#   python scripts/create_database.py
+#   python database/create_database.py
 
+import csv
+from pathlib import Path
 from db_connection import get_connection
 
+ROOT      = Path(__file__).resolve().parent.parent
+PROCESSED = ROOT / "data" / "processed"
+
+
 # -----------------------------------------------------------------------------
-# TABLE DEFINITIONS
-# Order matters: referenced tables must be created before referencing tables
+# HELPERS
 # -----------------------------------------------------------------------------
 
-TABLES = [
+def get_csv_headers(filename):
+    # Return the list of column names from a processed CSV file
+    path = PROCESSED / filename
+    if not path.exists():
+        raise FileNotFoundError(f"CSV not found: {path}")
+    with open(path, encoding="utf-8") as f:
+        return next(csv.reader(f))
 
-    # ── Edition ───────────────────────────────────────────────────────────────
+
+def stat_cols_as_float(headers, exclude):
+    # Return SQL column definitions as FLOAT for all headers not in exclude
+    lines = []
+    for h in headers:
+        if h not in exclude:
+            lines.append(f"        {h:<60} FLOAT")
+    return lines
+
+
+# -----------------------------------------------------------------------------
+# DYNAMIC TABLE BUILDERS
+# (teams and players have variable stat columns read from CSV headers)
+# -----------------------------------------------------------------------------
+
+def build_teams_sql():
+    headers    = get_csv_headers("teams.csv")
+    fixed_names = {
+        "id", "team", "edition_id", "team_female", "city",
+        "stadium_name", "stadium_capacity", "squad_size", "average_age",
+        "national_team_players", "table_position", "years_in_league",
+    }
+    fixed = [
+        "        id                                          INTEGER PRIMARY KEY",
+        "        team                                        VARCHAR(100)",
+        "        edition_id                                  INTEGER REFERENCES edition(id)",
+        "        team_female                                 BOOLEAN",
+        "        city                                        VARCHAR(100)",
+        "        stadium_name                                VARCHAR(150)",
+        "        stadium_capacity                            INTEGER",
+        "        squad_size                                  INTEGER",
+        "        average_age                                 FLOAT",
+        "        national_team_players                       INTEGER",
+        "        table_position                              INTEGER",
+        "        years_in_league                             INTEGER",
+    ]
+    all_lines = fixed + stat_cols_as_float(headers, fixed_names)
+    return (
+        "CREATE TABLE IF NOT EXISTS teams (\n"
+        + ",\n".join(all_lines) + "\n"
+        ");"
+    )
+
+
+def build_players_sql():
+    headers    = get_csv_headers("players.csv")
+    fixed_names = {
+        "id", "player_name", "player_first_name", "player_last_name",
+        "player_known_name", "team_id", "edition_id", "player_female",
+        "birth_date", "age", "birth_place", "nationalities",
+        "player_height", "player_weight", "primary_position",
+        "secondary_position", "shirt_number", "joined_date",
+        "contract_end", "market_value_m", "matches", "goals",
+        "assists", "minutes", "yellow_cards", "red_cards",
+        "player_season_most_recent_match",
+    }
+    fixed = [
+        "        id                                          INTEGER PRIMARY KEY",
+        "        player_name                                 VARCHAR(150)",
+        "        player_first_name                           VARCHAR(100)",
+        "        player_last_name                            VARCHAR(100)",
+        "        player_known_name                           VARCHAR(100)",
+        "        team_id                                     INTEGER REFERENCES teams(id)",
+        "        edition_id                                  INTEGER REFERENCES edition(id)",
+        "        player_female                               BOOLEAN",
+        "        birth_date                                  DATE",
+        "        age                                         INTEGER",
+        "        birth_place                                 VARCHAR(100)",
+        "        nationalities                               VARCHAR(200)",
+        "        player_height                               FLOAT",
+        "        player_weight                               FLOAT",
+        "        primary_position                            VARCHAR(100)",
+        "        secondary_position                          VARCHAR(100)",
+        "        shirt_number                                INTEGER",
+        "        joined_date                                 DATE",
+        "        contract_end                                DATE",
+        "        market_value_m                              FLOAT",
+        "        matches                                     INTEGER",
+        "        goals                                       INTEGER",
+        "        assists                                     INTEGER",
+        "        minutes                                     INTEGER",
+        "        yellow_cards                                INTEGER",
+        "        red_cards                                   INTEGER",
+        "        player_season_most_recent_match             TIMESTAMP",
+    ]
+    all_lines = fixed + stat_cols_as_float(headers, fixed_names)
+    return (
+        "CREATE TABLE IF NOT EXISTS players (\n"
+        + ",\n".join(all_lines) + "\n"
+        ");"
+    )
+
+
+# -----------------------------------------------------------------------------
+# STATIC TABLE DEFINITIONS
+# -----------------------------------------------------------------------------
+
+TABLES_AFTER_TEAMS_AND_PLAYERS = [
+
+    # ── Teams Mapping ─────────────────────────────────────────────────────────
     """
-    CREATE TABLE IF NOT EXISTS edition (
-        id          INTEGER PRIMARY KEY,
-        competition VARCHAR(100) NOT NULL,
-        season      VARCHAR(20)  NOT NULL
+    CREATE TABLE IF NOT EXISTS teams_mapping (
+        id      INTEGER PRIMARY KEY REFERENCES teams(id),
+        sb_id   INTEGER,
+        sc_id   INTEGER,
+        tm_id   INTEGER
     );
     """,
 
-    # ── Teams ─────────────────────────────────────────────────────────────────
+    # ── Players Mapping ───────────────────────────────────────────────────────
     """
-    CREATE TABLE IF NOT EXISTS teams (
-        id                                          INTEGER PRIMARY KEY,
-        team                                        VARCHAR(100),
-        edition_id                                  INTEGER REFERENCES edition(id),
-        team_female                                 BOOLEAN,
-        city                                        VARCHAR(100),
-        stadium_name                                VARCHAR(150),
-        stadium_capacity                            INTEGER,
-        squad_size                                  INTEGER,
-        average_age                                 FLOAT,
-        national_team_players                       INTEGER,
-        table_position                              INTEGER,
-        years_in_league                             INTEGER,
-        team_season_matches                         INTEGER,
-        team_season_gd                              INTEGER,
-        team_season_xgd                             FLOAT,
-        team_season_np_shots_pg                     FLOAT,
-        team_season_op_shots_pg                     FLOAT,
-        team_season_op_shots_outside_box_pg         FLOAT,
-        team_season_sp_shots_pg                     FLOAT,
-        team_season_np_xg_pg                        FLOAT,
-        team_season_op_xg_pg                        FLOAT,
-        team_season_sp_xg_pg                        FLOAT,
-        team_season_np_xg_per_shot                  FLOAT,
-        team_season_np_shot_distance                FLOAT,
-        team_season_op_shot_distance                FLOAT,
-        team_season_sp_shot_distance                FLOAT,
-        team_season_possessions                     FLOAT,
-        team_season_possession                      FLOAT,
-        team_season_directness                      FLOAT,
-        team_season_pace_towards_goal               FLOAT,
-        team_season_gk_pass_distance                FLOAT,
-        team_season_gk_long_pass_ratio              FLOAT,
-        team_season_box_cross_ratio                 FLOAT,
-        team_season_passes_inside_box_pg            FLOAT,
-        team_season_defensive_distance              FLOAT,
-        team_season_ppda                            FLOAT,
-        team_season_defensive_distance_ppda         FLOAT,
-        team_season_opp_passing_ratio               FLOAT,
-        team_season_opp_final_third_pass_ratio      FLOAT,
-        team_season_np_shots_conceded_pg            FLOAT,
-        team_season_op_shots_conceded_pg            FLOAT,
-        team_season_op_shots_conceded_outside_box_pg FLOAT,
-        team_season_sp_shots_conceded_pg            FLOAT,
-        team_season_np_xg_conceded_pg               FLOAT,
-        team_season_op_xg_conceded_pg               FLOAT,
-        team_season_sp_xg_conceded_pg               FLOAT,
-        team_season_np_xg_per_shot_conceded         FLOAT,
-        team_season_np_shot_distance_conceded       FLOAT,
-        team_season_op_shot_distance_conceded       FLOAT,
-        team_season_sp_shot_distance_conceded       FLOAT,
-        team_season_deep_completions_conceded_pg    FLOAT,
-        team_season_passes_inside_box_conceded_pg   FLOAT,
-        team_season_corners_pg                      FLOAT,
-        team_season_corner_xg_pg                    FLOAT,
-        team_season_xg_per_corner                   FLOAT,
-        team_season_free_kicks_pg                   FLOAT,
-        team_season_free_kick_xg_pg                 FLOAT,
-        team_season_xg_per_free_kick                FLOAT,
-        team_season_direct_free_kicks_pg            FLOAT,
-        team_season_direct_free_kick_xg_pg          FLOAT,
-        team_season_xg_per_direct_free_kick         FLOAT,
-        team_season_throw_ins_pg                    FLOAT,
-        team_season_throw_in_xg_pg                  FLOAT,
-        team_season_xg_per_throw_in                 FLOAT,
-        team_season_ball_in_play_time               FLOAT,
-        team_season_counter_attacking_shots_pg      FLOAT,
-        team_season_high_press_shots_pg             FLOAT,
-        team_season_shots_in_clear_pg               FLOAT,
-        team_season_counter_attacking_shots_conceded_pg FLOAT,
-        team_season_shots_in_clear_conceded_pg      FLOAT,
-        team_season_aggressive_actions_pg           FLOAT,
-        team_season_aggression                      FLOAT,
-        team_season_goals_pg                        FLOAT,
-        team_season_own_goals_pg                    FLOAT,
-        team_season_penalty_goals_pg                FLOAT,
-        team_season_goals_conceded_pg               FLOAT,
-        team_season_opposition_own_goals_pg         FLOAT,
-        team_season_penalty_goals_conceded_pg       FLOAT,
-        team_season_gd_pg                           FLOAT,
-        team_season_np_gd_pg                        FLOAT,
-        team_season_xgd_pg                          FLOAT,
-        team_season_np_xgd_pg                       FLOAT,
-        team_season_deep_completions_pg             FLOAT,
-        team_season_passing_ratio                   FLOAT,
-        team_season_pressures_pg                    FLOAT,
-        team_season_counterpressures_pg             FLOAT,
-        team_season_pressure_regains_pg             FLOAT,
-        team_season_counterpressure_regains_pg      FLOAT,
-        team_season_defensive_action_regains_pg     FLOAT,
-        team_season_yellow_cards_pg                 FLOAT,
-        team_season_second_yellow_cards_pg          FLOAT,
-        team_season_red_cards_pg                    FLOAT,
-        team_season_fhalf_pressures_pg              FLOAT,
-        team_season_fhalf_counterpressures_pg       FLOAT,
-        team_season_fhalf_pressures_ratio           FLOAT,
-        team_season_fhalf_counterpressures_ratio    FLOAT,
-        team_season_crosses_into_box_pg             FLOAT,
-        team_season_successful_crosses_into_box_pg  FLOAT,
-        team_season_successful_box_cross_ratio      FLOAT,
-        team_season_deep_progressions_pg            FLOAT,
-        team_season_deep_progressions_conceded_pg   FLOAT,
-        team_season_obv_pg                          FLOAT,
-        team_season_obv_pass_pg                     FLOAT,
-        team_season_obv_shot_pg                     FLOAT,
-        team_season_obv_defensive_action_pg         FLOAT,
-        team_season_obv_dribble_carry_pg            FLOAT,
-        team_season_obv_gk_pg                       FLOAT,
-        team_season_obv_conceded_pg                 FLOAT,
-        team_season_passes_pg                       FLOAT,
-        team_season_successful_passes_pg            FLOAT,
-        team_season_passes_conceded_pg              FLOAT,
-        team_season_successful_passes_conceded_pg   FLOAT,
-        team_season_op_passes_pg                    FLOAT,
-        team_season_op_passes_conceded_pg           FLOAT,
-        team_season_penalties_won_pg                FLOAT,
-        team_season_penalties_conceded_pg           FLOAT,
-        team_season_completed_dribbles_pg           FLOAT,
-        team_season_dribble_ratio                   FLOAT,
-        team_season_completed_dribbles_conceded_pg  FLOAT,
-        team_season_opposition_dribble_ratio        FLOAT,
-        team_season_high_press_shots_conceded_pg    FLOAT,
-        team_season_sp_pg                           FLOAT,
-        team_season_sp_goals_pg                     FLOAT,
-        team_season_sp_pg_conceded                  FLOAT,
-        team_season_sp_goals_pg_conceded            FLOAT
-    );
-    """,
-
-    # ── Players ───────────────────────────────────────────────────────────────
-    """
-    CREATE TABLE IF NOT EXISTS players (
-        id                                          INTEGER PRIMARY KEY,
-        player_name                                 VARCHAR(150),
-        player_first_name                           VARCHAR(100),
-        player_last_name                            VARCHAR(100),
-        player_known_name                           VARCHAR(100),
-        team_id                                     INTEGER REFERENCES teams(id),
-        edition_id                                  INTEGER REFERENCES edition(id),
-        player_female                               BOOLEAN,
-        birth_date                                  DATE,
-        age                                         INTEGER,
-        birth_place                                 VARCHAR(100),
-        nationalities                               VARCHAR(200),
-        player_height                               FLOAT,
-        player_weight                               FLOAT,
-        primary_position                            VARCHAR(100),
-        secondary_position                          VARCHAR(100),
-        shirt_number                                INTEGER,
-        joined_date                                 DATE,
-        contract_end                                DATE,
-        market_value_m                              FLOAT,
-        matches                                     INTEGER,
-        goals                                       INTEGER,
-        assists                                     INTEGER,
-        minutes                                     INTEGER,
-        yellow_cards                                INTEGER,
-        red_cards                                   INTEGER,
-        player_season_minutes                       FLOAT,
-        player_season_np_xg_per_shot                FLOAT,
-        player_season_np_xg_90                      FLOAT,
-        player_season_np_shots_90                   FLOAT,
-        player_season_goals_90                      FLOAT,
-        player_season_npga_90                       FLOAT,
-        player_season_xa_90                         FLOAT,
-        player_season_key_passes_90                 FLOAT,
-        player_season_op_key_passes_90              FLOAT,
-        player_season_assists_90                    FLOAT,
-        player_season_through_balls_90              FLOAT,
-        player_season_passes_into_box_90            FLOAT,
-        player_season_touches_inside_box_90         FLOAT,
-        player_season_tackles_90                    FLOAT,
-        player_season_interceptions_90              FLOAT,
-        player_season_tackles_and_interceptions_90  FLOAT,
-        player_season_padj_tackles_90               FLOAT,
-        player_season_padj_interceptions_90         FLOAT,
-        player_season_padj_tackles_and_interceptions_90 FLOAT,
-        player_season_challenge_ratio               FLOAT,
-        player_season_dribbles_90                   FLOAT,
-        player_season_fouls_90                      FLOAT,
-        player_season_dribbled_past_90              FLOAT,
-        player_season_dispossessions_90             FLOAT,
-        player_season_long_ball_ratio               FLOAT,
-        player_season_long_balls_90                 FLOAT,
-        player_season_clearance_90                  FLOAT,
-        player_season_aerial_ratio                  FLOAT,
-        player_season_aerial_wins_90                FLOAT,
-        player_season_op_passes_90                  FLOAT,
-        player_season_passing_ratio                 FLOAT,
-        player_season_npg_90                        FLOAT,
-        player_season_crosses_90                    FLOAT,
-        player_season_xgchain_90                    FLOAT,
-        player_season_xgbuildup_90                  FLOAT,
-        player_season_pressures_90                  FLOAT,
-        player_season_pressure_regains_90           FLOAT,
-        player_season_deep_progressions_90          FLOAT,
-        player_season_carries_90                    FLOAT,
-        player_season_yellow_cards_90               FLOAT,
-        player_season_red_cards_90                  FLOAT,
-        player_season_obv_90                        FLOAT,
-        player_season_obv_pass_90                   FLOAT,
-        player_season_obv_shot_90                   FLOAT,
-        player_season_obv_dribble_carry_90          FLOAT,
-        player_season_appearances                   INTEGER,
-        player_season_starting_appearances          INTEGER,
-        player_season_average_minutes               FLOAT,
-        player_season_90s_played                    FLOAT,
-        player_season_most_recent_match             TIMESTAMP,
-        player_season_positive_outcome_score        FLOAT,
-        player_season_shots_faced_90                FLOAT,
-        player_season_goals_faced_90                FLOAT,
-        player_season_np_xg_faced_90                FLOAT,
-        player_season_save_ratio                    FLOAT,
-        player_season_gsaa_90                       FLOAT
+    CREATE TABLE IF NOT EXISTS players_mapping (
+        id      INTEGER PRIMARY KEY REFERENCES players(id),
+        sb_id   INTEGER,
+        sc_id   INTEGER,
+        tm_id   INTEGER
     );
     """,
 
@@ -271,6 +175,15 @@ TABLES = [
     );
     """,
 
+    # ── Matches Mapping ───────────────────────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS matches_mapping (
+        id      INTEGER PRIMARY KEY REFERENCES matches(id),
+        sb_id   INTEGER,
+        sc_id   INTEGER
+    );
+    """,
+
     # ── Match Players ─────────────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS match_players (
@@ -294,41 +207,12 @@ TABLES = [
     );
     """,
 
-    # ── Teams Mapping ─────────────────────────────────────────────────────────
-    """
-    CREATE TABLE IF NOT EXISTS teams_mapping (
-        id      INTEGER PRIMARY KEY REFERENCES teams(id),
-        sb_id   INTEGER,
-        sc_id   INTEGER,
-        tm_id   INTEGER
-    );
-    """,
-
-    # ── Players Mapping ───────────────────────────────────────────────────────
-    """
-    CREATE TABLE IF NOT EXISTS players_mapping (
-        id      INTEGER PRIMARY KEY REFERENCES players(id),
-        sb_id   INTEGER,
-        sc_id   INTEGER,
-        tm_id   INTEGER
-    );
-    """,
-
-    # ── Matches Mapping ───────────────────────────────────────────────────────
-    """
-    CREATE TABLE IF NOT EXISTS matches_mapping (
-        id      INTEGER PRIMARY KEY REFERENCES matches(id),
-        sb_id   INTEGER,
-        sc_id   INTEGER
-    );
-    """,
-
     # ── Events ────────────────────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS events (
         id              UUID PRIMARY KEY,
-        match_id        INTEGER,
-        player_id       INTEGER,
+        match_id        INTEGER REFERENCES matches(id),
+        player_id       INTEGER REFERENCES players(id),
         period          INTEGER,
         minute          INTEGER,
         second          INTEGER,
@@ -343,8 +227,7 @@ TABLES = [
         under_pressure  BOOLEAN,
         obv_for_net     FLOAT,
         obv_against_net FLOAT,
-        obv_total_net   FLOAT,
-        FOREIGN KEY (match_id, player_id) REFERENCES match_players(match_id, player_id)
+        obv_total_net   FLOAT
     );
     """,
 
@@ -434,8 +317,8 @@ TABLES = [
     """
     CREATE TABLE IF NOT EXISTS physical (
         id                              SERIAL PRIMARY KEY,
-        match_id                        INTEGER,
-        player_id                       INTEGER,
+        match_id                        INTEGER REFERENCES matches(id),
+        player_id                       INTEGER REFERENCES players(id),
         match_count                     INTEGER,
         minutes_full_all                FLOAT,
         physical_check_passed           BOOLEAN,
@@ -461,8 +344,7 @@ TABLES = [
         timetosprintpostcod             FLOAT,
         cod_count_full_all              FLOAT,
         timeto505around90               FLOAT,
-        timeto505around180              FLOAT,
-        FOREIGN KEY (match_id, player_id) REFERENCES match_players(match_id, player_id)
+        timeto505around180              FLOAT
     );
     """,
 ]
@@ -477,7 +359,36 @@ def create_tables():
     conn.autocommit = True
     cursor = conn.cursor()
 
-    for sql in TABLES:
+    # Drop all tables in reverse dependency order
+    cursor.execute("""
+        DROP TABLE IF EXISTS
+            events_ball_recovery, events_pressure, events_carry,
+            events_pass, events_shot, physical, events,
+            match_players, matches_mapping, players_mapping, teams_mapping,
+            matches, players, teams, edition
+        CASCADE;
+    """)
+    print("Dropped all existing tables.")
+
+    # edition first (no dependencies)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS edition (
+            id          INTEGER PRIMARY KEY,
+            competition VARCHAR(100) NOT NULL,
+            season      VARCHAR(20)  NOT NULL
+        );
+    """)
+    print("Created table: edition")
+
+    # teams and players with dynamic stat columns from CSV headers
+    cursor.execute(build_teams_sql())
+    print("Created table: teams")
+
+    cursor.execute(build_players_sql())
+    print("Created table: players")
+
+    # All remaining static tables
+    for sql in TABLES_AFTER_TEAMS_AND_PLAYERS:
         name = [line.strip() for line in sql.strip().splitlines()
                 if line.strip().upper().startswith("CREATE TABLE")][0]
         name = name.split("EXISTS")[-1].strip().split("(")[0].strip()
