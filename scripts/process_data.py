@@ -37,6 +37,23 @@ def save_csv(df, filename):
 
 
 # ============================================================
+# EDITION
+# ============================================================
+
+# Single edition for this project - used as a constant across all tables
+EDITION_ID = 1
+
+def process_edition():
+    # Static table with one row representing the competition edition
+    df = pd.DataFrame([{
+        "id":          EDITION_ID,
+        "competition": "Ligue 1",
+        "season":      "2025/2026",
+    }])
+    save_csv(df, "edition")
+
+
+# ============================================================
 # TEAMS
 # ============================================================
 
@@ -89,9 +106,13 @@ def process_teams():
     source_cols = ["sb_id", "sb_name", "sc_id", "sc_name", "tm_id", "tm_name"]
     result = result.drop(columns=[c for c in source_cols if c in result.columns])
 
+    # Replace competition_name and season_name with edition_id
+    result["edition_id"] = EDITION_ID
+    result = result.drop(columns=[c for c in ["competition_name", "season_name"] if c in result.columns])
+
     # Put descriptive columns first, then all stats at the end
     identity_cols = [
-        "id", "team", "competition_name", "season_name", "team_female",
+        "id", "team", "edition_id", "team_female",
         "city", "stadium_name", "stadium_capacity",
         "squad_size", "average_age", "national_team_players",
         "table_position", "years_in_league",
@@ -171,10 +192,14 @@ def process_players():
     ]
     result = result.drop(columns=[c for c in source_cols if c in result.columns])
 
+    # Replace competition_name and season_name with edition_id
+    result["edition_id"] = EDITION_ID
+    result = result.drop(columns=[c for c in ["competition_name", "season_name"] if c in result.columns])
+
     # Put descriptive columns first, then all stats at the end
     identity_cols = [
         "id", "player_name", "player_first_name", "player_last_name", "player_known_name",
-        "team_id", "competition_name", "season_name", "player_female",
+        "team_id", "edition_id", "player_female",
         "birth_date", "age", "birth_place", "nationalities",
         "player_height", "player_weight",
         "primary_position", "secondary_position",
@@ -275,11 +300,15 @@ def process_matches():
     source_cols = ["sb_id", "sc_id", "date"]
     result = result.drop(columns=[c for c in source_cols if c in result.columns])
 
+    # Replace competition and season columns with edition_id
+    result["edition_id"] = EDITION_ID
+    result = result.drop(columns=[c for c in ["competition", "season"] if c in result.columns])
+
     # Reorder columns
     identity_cols = [
         "id",
         "match_date", "kick_off",
-        "competition", "season", "match_week", "competition_stage",
+        "edition_id", "match_week", "competition_stage",
         "home_team_id", "away_team_id",
         "home_score", "away_score",
         "period_1_minutes", "period_2_minutes",
@@ -591,6 +620,7 @@ def process_physical():
 
 
 if __name__ == "__main__":
+    process_edition()
     process_teams()
     process_players()
     process_matches()

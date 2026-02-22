@@ -243,7 +243,7 @@ PLAYER_ENDPOINTS = [
 ]
 
 
-def _fetch_player_endpoint(player, ep):
+def _fetch_player_endpoint(player, ep, edition_id):
     """
     Fetch one endpoint for one player.
     Deletes the old file first (record count in filename may change).
@@ -256,7 +256,7 @@ def _fetch_player_endpoint(player, ep):
     for old in outdir.glob(f"player_{pid}_*"):
         old.unlink()
 
-    data, status = api_get(ep["url"], {**ep["params"], "player": pid})
+    data, status = api_get(ep["url"], {**ep["params"], "player": pid, "competition_edition": edition_id})
 
     if status != 200 or data is None:
         save_json(outdir / f"player_{pid}_0_records.json",
@@ -273,7 +273,7 @@ def _fetch_player_endpoint(player, ep):
     return n
 
 
-def fetch_players_data(players):
+def fetch_players_data(players, edition_id):
     """Fetch all player endpoints for the given list of players."""
     ep_timings = {}
 
@@ -289,7 +289,7 @@ def fetch_players_data(players):
             pname = player.get("short_name", "?")
             safe_print(f"[{i+1}/{len(players)}] {pname} (ID: {pid})...")
 
-            result = _fetch_player_endpoint(player, ep)
+            result = _fetch_player_endpoint(player, ep, edition_id)
 
             if result == "error":
                 print("[ERROR]")
@@ -481,7 +481,7 @@ def main():
             if args.limit:
                 print(f"[TEST MODE] Limited to first {args.limit} players")
 
-        ep_timings = fetch_players_data(targets)
+        ep_timings = fetch_players_data(targets, edition_id)
         step_timings["players"] = time.time() - t_step
         step_timings.update({f"players/{k}": v for k, v in ep_timings.items()})
 

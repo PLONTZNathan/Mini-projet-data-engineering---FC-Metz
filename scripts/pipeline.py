@@ -49,6 +49,8 @@ MAPPING_SCRIPTS = {
     "matches": SCRIPTS_DIR / "mapping_matches.py",
 }
 
+PROCESS_SCRIPT = SCRIPTS_DIR / "process_data.py"
+
 ALL_INGEST_SOURCES  = list(INGEST_SCRIPTS.keys())
 ALL_MAPPING_TARGETS = list(MAPPING_SCRIPTS.keys())
 
@@ -71,7 +73,7 @@ def log(message: str, log_fh) -> None:
 
 def run(script: Path, args: list[str], log_fh) -> None:
     """Run a script as a subprocess, stream output to stdout and log file."""
-    cmd = [sys.executable, str(script)] + args
+    cmd = [sys.executable, "-u", str(script)] + args  # -u = unbuffered stdout
     header = (
         f"\n{'=' * 60}\n"
         f"  Running: {script.name}  {' '.join(args)}\n"
@@ -220,6 +222,9 @@ def main():
                 elif task["type"] == "mapping":
                     for target in task["targets"]:
                         run(MAPPING_SCRIPTS[target], [], log_fh)
+
+        # Always run process_data.py at the end to regenerate all processed CSV files
+        run(PROCESS_SCRIPT, [], log_fh)
 
         elapsed = time.time() - start
         minutes, seconds = divmod(int(elapsed), 60)
