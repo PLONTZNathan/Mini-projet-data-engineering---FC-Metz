@@ -363,8 +363,237 @@ def process_match_players():
     result = pd.DataFrame(rows)
     save_csv(result, "match_players")
 
+# ============================================================
+# EVENTS
+# ============================================================
+
+# Event types to process and their specific sub-key in the JSON
+EVENT_TYPES = {
+    "Shot":          "shot",
+    "Pass":          "pass",
+    "Carry":         "carry",
+    "Pressure":      "pressure",
+    "Ball Recovery": "ball_recovery",
+}
+
+# Specific sub-fields to extract for each event type
+EVENT_SUBFIELDS = {
+    "shot": [
+        "statsbomb_xg", "shot_execution_xg", "shot_execution_xg_uplift",
+        "gk_save_difficulty_xg", "gk_positioning_xg_suppression",
+        "gk_shot_stopping_xg_suppression",
+        "end_location", "type", "technique", "outcome", "body_part",
+        "first_time", "follows_dribble", "key_pass_id", "shot_shot_assist",
+    ],
+    "pass": [
+        "recipient", "length", "angle", "height", "end_location",
+        "pass_success_probability", "body_part", "type", "technique",
+        "outcome", "cross", "cut_back", "switch", "through_ball",
+        "goal_assist", "shot_assist", "assisted_shot_id",
+        "inswinging", "deflected", "aerial_won", "miscommunication",
+        "pass_cluster_id", "pass_cluster_label", "pass_cluster_probability", "xclaim",
+    ],
+    "carry": [
+        "end_location",
+    ],
+    "ball_recovery": [
+        "recovery_failure",
+    ],
+    "pressure": [
+        "counterpress",
+    ],
+}
+
+
+def parse_location(location):
+    # Split a [x, y] or [x, y, z] location list into separate floats
+    if location and len(location) >= 2:
+        x = location[0]
+        y = location[1]
+        z = location[2] if len(location) == 3 else None
+        return x, y, z
+    return None, None, None
+
+
+def load_events_for_match(sb_match_id, match_id, sb_player_lookup):
+    # Load a single StatsBomb events file and return (events_rows, sub_rows_by_type)
+    path = os.path.join(RAW, "statsbomb", "events", f"match_{sb_match_id}_events.json")
+    if not os.path.exists(path):
+        return [], {t: [] for t in EVENT_TYPES}
+
+    with open(path, encoding="utf-8") as f:
+        raw = json.load(f)
+
+    event_rows = []
+    sub_rows   = {t: [] for t in EVENT_TYPES}
+
+    for e in raw:
+        event_type = e.get("type", {}).get("name")
+
+        # Only process the five selected event types with a player
+        if event_type not in EVENT_TYPES or "player" not in e:
+            continue
+
+        sb_player_id = e.get("player", {}).get("id")
+        player_id    = sb_player_lookup.get(sb_player_id)
+
+        location_x, location_y, location_z = parse_location(e.get("location"))
+
+        # Common fields for events.csv
+        event_rows.append({
+            "id":               e.get("id"),
+            "match_id":         match_id,
+            "player_id":        player_id,
+            "period":           e.get("period"),
+            "minute":           e.get("minute"),
+            "second":           e.get("second"),
+            "timestamp":        e.get("timestamp"),
+            "type":             event_type,
+            "play_pattern":     e.get("play_pattern", {}).get("name"),
+            "possession":       e.get("possession"),
+            "possession_team":  e.get("possession_team", {}).get("name"),
+            "location_x":       location_x,
+            "location_y":       location_y,
+            "duration":         e.get("duration"),
+            "under_pressure":   e.get("under_pressure"),
+            "obv_for_net":      e.get("obv_for_net"),
+            "obv_against_net":  e.get("obv_against_net"),
+            "obv_total_net":    e.get("obv_total_net"),
+        })
+
+        # Specific sub-fields for the event type sub-table
+        sub_key = EVENT_TYPES[event_type]
+
+        # Pressure has no sub-object, its specific fields are at the root level
+        if sub_key == "pressure":
+            sub_data = e
+        else:
+            sub_data = e.get(sub_key, {}) or {}
+        row = {"event_id": e.get("id")}
+
+        # For shots, add the z coordinate of the location
+        if sub_key == "shot":
+            row["location_z"] = location_z
+
+        for field in EVENT_SUBFIELDS.get(sub_key, []):
+            value = sub_data.get(field)
+            # Flatten nested objects to their name, flatten end_location to x/y
+            if field == "end_location":
+                ex, ey, _ = parse_location(value)
+                row["end_location_x"] = ex
+                row["end_location_y"] = ey
+            elif field == "recipient":
+                row["recipient_id"] = sb_player_lookup.get(
+                    value.get("id") if isinstance(value, dict) else None
+                )
+            elif isinstance(value, dict):
+                row[field] = value.get("name")
+            else:
+                row[field] = value
+
+        sub_rows[event_type].append(row)
+
+    return event_rows, sub_rows
+
+
+def process_events():
+    matches_mapping = pd.read_csv(os.path.join(RAW, "mapping", "matches_mapping.csv"))
+    players_mapping = pd.read_csv(os.path.join(RAW, "mapping", "players_mapping.csv"))
+
+    # Build lookups
+    # StatsBomb match sb_id -> our internal match id
+    sb_match_lookup  = dict(zip(matches_mapping["sb_id"], matches_mapping["id"]))
+    # StatsBomb player sb_id -> our internal player id
+    sb_player_lookup = dict(zip(players_mapping["sb_id"], players_mapping["id"]))
+
+    all_events   = []
+    all_sub_rows = {t: [] for t in EVENT_TYPES}
+
+    for sb_match_id, match_id in sb_match_lookup.items():
+        event_rows, sub_rows = load_events_for_match(
+            sb_match_id, match_id, sb_player_lookup
+        )
+        all_events.extend(event_rows)
+        for event_type in EVENT_TYPES:
+            all_sub_rows[event_type].extend(sub_rows[event_type])
+
+    # Save events.csv
+    save_csv(pd.DataFrame(all_events), "events")
+
+    # Save one sub-table per event type that has specific fields
+    for event_type, sub_key in EVENT_TYPES.items():
+        if sub_key is not None:
+            filename = "events_" + sub_key
+            save_csv(pd.DataFrame(all_sub_rows[event_type]), filename)
+
+
+# ============================================================
+# PHYSICAL
+# ============================================================
+
+def process_physical():
+    players_mapping = pd.read_csv(os.path.join(RAW, "mapping", "players_mapping.csv"))
+    matches_mapping = pd.read_csv(os.path.join(RAW, "mapping", "matches_mapping.csv"))
+
+    # Build lookups: SkillCorner ids -> our internal ids
+    sc_player_lookup = dict(zip(players_mapping["sc_id"], players_mapping["id"]))
+    sc_match_lookup  = dict(zip(matches_mapping["sc_id"], matches_mapping["id"]))
+
+    # Physical fields to extract from each result entry
+    PHYSICAL_FIELDS = [
+        "minutes_full_all", "physical_check_passed",
+        "total_distance_full_all", "total_metersperminute_full_all",
+        "running_distance_full_all",
+        "hsr_distance_full_all", "hsr_count_full_all",
+        "sprint_distance_full_all", "sprint_count_full_all",
+        "hi_distance_full_all", "hi_count_full_all",
+        "psv99",
+        "medaccel_count_full_all", "highaccel_count_full_all",
+        "meddecel_count_full_all", "highdecel_count_full_all",
+        "explacceltohsr_count_full_all", "timetohsr", "timetohsrpostcod",
+        "explacceltosprint_count_full_all", "timetosprint", "timetosprintpostcod",
+        "cod_count_full_all", "timeto505around90", "timeto505around180",
+    ]
+
+    rows = []
+    physical_dir = os.path.join(RAW, "skillcorner", "physical")
+
+    for filename in os.listdir(physical_dir):
+        if not filename.endswith(".json"):
+            continue
+
+        with open(os.path.join(physical_dir, filename), encoding="utf-8") as f:
+            data = json.load(f)
+
+        # Total number of match entries in this file
+        match_count = data.get("count", 0)
+
+        for entry in data.get("results", []):
+            sc_player_id = entry.get("player_id")
+            sc_match_id  = entry.get("match_id")
+
+            row = {
+                "player_id":   sc_player_lookup.get(sc_player_id),
+                "match_id":    sc_match_lookup.get(sc_match_id),
+                "match_count": match_count,
+            }
+
+            for field in PHYSICAL_FIELDS:
+                row[field] = entry.get(field)
+
+            rows.append(row)
+
+    # Generate a simple auto-incremented id
+    result = pd.DataFrame(rows)
+    result.insert(0, "id", range(1, len(result) + 1))
+
+    save_csv(result, "physical")
+
+
 if __name__ == "__main__":
     process_teams()
     process_players()
     process_matches()
     process_match_players()
+    process_events()
+    process_physical()
