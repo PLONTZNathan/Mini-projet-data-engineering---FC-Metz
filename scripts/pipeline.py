@@ -26,6 +26,9 @@ USAGE
   Inject processed data into database:
       python pipeline.py --inject
 
+  Process data (regenerate processed CSVs):
+      python pipeline.py --process
+
   Combined:
       python pipeline.py --ingest skillcorner --all \
                          --ingest transfermarkt --players \
@@ -130,7 +133,7 @@ def parse_args(argv: list[str]) -> dict:
             ]
         }
     """
-    parsed = {"all": False, "create_db": False, "inject": False, "tasks": []}
+    parsed = {"all": False, "create_db": False, "inject": False, "process": False, "tasks": []}
 
     i = 0
     while i < len(argv):
@@ -151,6 +154,11 @@ def parse_args(argv: list[str]) -> dict:
             parsed["inject"] = True
             i += 1
 
+        # --process
+        elif token == "--process":
+            parsed["process"] = True
+            i += 1
+
         # --ingest <source> [flags and IDs until next top-level token]
         elif token == "--ingest":
             i += 1
@@ -166,7 +174,7 @@ def parse_args(argv: list[str]) -> dict:
             i += 1
 
             block_args = []
-            top_level = ("--ingest", "--mapping", "--all", "--create-db", "--inject")
+            top_level = ("--ingest", "--mapping", "--all", "--create-db", "--inject", "--process")
             while i < len(argv) and argv[i] not in top_level:
                 block_args.append(argv[i])
                 i += 1
@@ -238,7 +246,7 @@ def main():
             run(CREATE_DB_SCRIPT, [], log_fh)
             run(INJECT_SCRIPT, [], log_fh)
 
-        elif not parsed["tasks"] and not parsed["create_db"] and not parsed["inject"]:
+        elif not parsed["tasks"] and not parsed["create_db"] and not parsed["inject"] and not parsed["process"]:
             msg = "[WARNING] Nothing to do.\nRun  python pipeline.py  for full usage."
             log(msg, log_fh)
             return
@@ -252,8 +260,8 @@ def main():
                     for target in task["targets"]:
                         run(MAPPING_SCRIPTS[target], [], log_fh)
 
-            # Always regenerate processed CSVs after ingest/mapping tasks
-            if parsed["tasks"]:
+            # --process: regenerate processed CSVs
+            if parsed["process"]:
                 run(PROCESS_SCRIPT, [], log_fh)
 
             # --create-db: drop and recreate all tables
