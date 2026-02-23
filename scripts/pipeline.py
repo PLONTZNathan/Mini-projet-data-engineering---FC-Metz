@@ -20,6 +20,12 @@ USAGE
       python pipeline.py --mapping players
       python pipeline.py --mapping players teams matches
 
+  Create database tables (drops and recreates):
+      python pipeline.py --create-db
+
+  Inject processed data into database:
+      python pipeline.py --inject
+
   Combined:
       python pipeline.py --ingest skillcorner --all \
                          --ingest transfermarkt --players \
@@ -49,7 +55,9 @@ MAPPING_SCRIPTS = {
     "matches": SCRIPTS_DIR / "mapping_matches.py",
 }
 
-PROCESS_SCRIPT = SCRIPTS_DIR / "process_data.py"
+PROCESS_SCRIPT   = SCRIPTS_DIR / "process_data.py"
+CREATE_DB_SCRIPT = SCRIPTS_DIR.parent / "database" / "create_database.py"
+INJECT_SCRIPT    = SCRIPTS_DIR.parent / "database" / "inject_processed_data_in_database.py"
 
 ALL_INGEST_SOURCES  = list(INGEST_SCRIPTS.keys())
 ALL_MAPPING_TARGETS = list(MAPPING_SCRIPTS.keys())
@@ -74,6 +82,9 @@ def log(message: str, log_fh) -> None:
 def run(script: Path, args: list[str], log_fh) -> None:
     """Run a script as a subprocess, stream output to stdout and log file."""
     cmd = [sys.executable, "-u", str(script)] + args  # -u = unbuffered stdout
+    # Each script runs from its own directory so relative imports work correctly
+    cwd = script.parent
+
     header = (
         f"\n{'=' * 60}\n"
         f"  Running: {script.name}  {' '.join(args)}\n"
@@ -87,6 +98,7 @@ def run(script: Path, args: list[str], log_fh) -> None:
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        cwd=cwd,
     )
 
     for line in process.stdout:
@@ -109,6 +121,8 @@ def parse_args(argv: list[str]) -> dict:
     Returns:
         {
             "all": bool,
+            "create_db": bool,
+            "inject": bool,
             "tasks": [
                 {"type": "ingest",  "source": "skillcorner", "args": ["--players", "14", "18"]},
                 {"type": "ingest",  "source": "statsbomb",   "args": ["--events"]},
@@ -116,7 +130,7 @@ def parse_args(argv: list[str]) -> dict:
             ]
         }
     """
-    parsed = {"all": False, "tasks": []}
+    parsed = {"all": False, "create_db": False, "inject": False, "tasks": []}
 
     i = 0
     while i < len(argv):
@@ -127,7 +141,17 @@ def parse_args(argv: list[str]) -> dict:
             parsed["all"] = True
             i += 1
 
-        # --ingest <source> [flags and IDs until next --ingest or --mapping or EOF]
+        # --create-db
+        elif token == "--create-db":
+            parsed["create_db"] = True
+            i += 1
+
+        # --inject
+        elif token == "--inject":
+            parsed["inject"] = True
+            i += 1
+
+        # --ingest <source> [flags and IDs until next top-level token]
         elif token == "--ingest":
             i += 1
             if i >= len(argv):
@@ -141,9 +165,9 @@ def parse_args(argv: list[str]) -> dict:
                 sys.exit(1)
             i += 1
 
-            # Collect all following tokens until next --ingest or --mapping
             block_args = []
-            while i < len(argv) and argv[i] not in ("--ingest", "--mapping", "--all"):
+            top_level = ("--ingest", "--mapping", "--all", "--create-db", "--inject")
+            while i < len(argv) and argv[i] not in top_level:
                 block_args.append(argv[i])
                 i += 1
 
@@ -157,7 +181,6 @@ def parse_args(argv: list[str]) -> dict:
         elif token == "--mapping":
             i += 1
 
-            # --mapping alone or --mapping --all -> all targets
             if i >= len(argv) or argv[i].startswith("--"):
                 targets = ALL_MAPPING_TARGETS
             else:
@@ -205,17 +228,23 @@ def main():
         log_fh.write(f"Pipeline started at {datetime.now().isoformat()}\n")
         print(f"[LOG] Output will be saved to: {LOG_FILE}")
 
-        # --all shortcut
+        # --all: ingest + mapping + process + create-db + inject
         if parsed["all"]:
             for source in ALL_INGEST_SOURCES:
                 run(INGEST_SCRIPTS[source], ["--all"], log_fh)
             for target in ALL_MAPPING_TARGETS:
                 run(MAPPING_SCRIPTS[target], [], log_fh)
-        elif not parsed["tasks"]:
+            run(PROCESS_SCRIPT, [], log_fh)
+            run(CREATE_DB_SCRIPT, [], log_fh)
+            run(INJECT_SCRIPT, [], log_fh)
+
+        elif not parsed["tasks"] and not parsed["create_db"] and not parsed["inject"]:
             msg = "[WARNING] Nothing to do.\nRun  python pipeline.py  for full usage."
             log(msg, log_fh)
             return
+
         else:
+            # Run ingest/mapping tasks
             for task in parsed["tasks"]:
                 if task["type"] == "ingest":
                     run(INGEST_SCRIPTS[task["source"]], task["args"], log_fh)
@@ -223,8 +252,17 @@ def main():
                     for target in task["targets"]:
                         run(MAPPING_SCRIPTS[target], [], log_fh)
 
-        # Always run process_data.py at the end to regenerate all processed CSV files
-        run(PROCESS_SCRIPT, [], log_fh)
+            # Always regenerate processed CSVs after ingest/mapping tasks
+            if parsed["tasks"]:
+                run(PROCESS_SCRIPT, [], log_fh)
+
+            # --create-db: drop and recreate all tables
+            if parsed["create_db"]:
+                run(CREATE_DB_SCRIPT, [], log_fh)
+
+            # --inject: inject processed CSVs into the database
+            if parsed["inject"]:
+                run(INJECT_SCRIPT, [], log_fh)
 
         elapsed = time.time() - start
         minutes, seconds = divmod(int(elapsed), 60)
