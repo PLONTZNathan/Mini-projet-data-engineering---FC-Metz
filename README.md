@@ -15,6 +15,7 @@ A data engineering project that ingests, maps, and centralizes football data fro
 5. [How to Run](#how-to-run)
 6. [Pipeline Reference](#pipeline-reference)
 7. [Technical Choices](#technical-choices)
+8. [Docker Setup](#docker-setup)
 
 ---
 
@@ -254,3 +255,84 @@ Raw data from all three sources is always saved to disk first (`data/raw/`) befo
 ### Resumable Ingestion
 
 Event ingestion is designed to be resumable: already-downloaded match files are skipped unless specific match IDs are passed (force re-download). This makes the pipeline safe to interrupt and restart without duplicating work.
+
+---
+
+## Docker Setup
+
+This project can be run entirely via Docker — no Python, PostgreSQL, or pgAdmin installation required on your machine.
+
+### Prerequisites
+
+Install **Docker Desktop**: https://www.docker.com/products/docker-desktop/  
+Launch it and wait for the whale icon in the taskbar to be stable.
+
+### 1. Fill in the `.env` file
+
+Open the `.env` file and fill in your API credentials. Make sure to wrap values in single quotes to avoid issues with special characters:
+
+```env
+STATSBOMB_USERNAME='your_email'
+STATSBOMB_PASSWORD='your_password'
+SKILLCORNER_USERNAME='your_login'
+SKILLCORNER_PASSWORD='your_password'
+```
+
+The DB section is already pre-configured for Docker — do not modify it:
+
+```env
+DB_HOST=db
+DB_PORT=5432
+DB_NAME=fc_metz_mini_projet
+DB_USER=postgres
+DB_PASSWORD=postgres
+```
+
+### 2. Start the database and pgAdmin
+
+```bash
+docker-compose up -d db pgadmin
+```
+
+### 3. Run the pipeline
+
+```bash
+docker-compose run --rm pipeline python scripts/pipeline.py --all
+```
+
+This step fetches all data, builds the mappings, creates the database schema, and injects everything. It takes approximately **30–40 minutes** depending on your internet connection. Generated data files are saved locally in the `data/` folder.
+
+### 4. Visualize the database
+
+1. Open **http://localhost:5050** in your browser
+2. Log in with `admin@fc-metz.fr` / `admin`
+3. Right-click on **Servers** → **Register** → **Server**
+4. Fill in:
+   - **General** tab → Name: `fc_metz`
+   - **Connection** tab:
+     - Host: `db`
+     - Port: `5432`
+     - Database: `fc_metz_mini_projet`
+     - Username: `postgres`
+     - Password: `postgres`
+5. Click **Save** — the database is now accessible
+
+### 5. Browse the tables
+
+In pgAdmin, expand the tree:  
+**Servers → fc_metz → Databases → fc_metz_mini_projet → Schemas → public → Tables**
+
+To view the content of a table: right-click on it → **View/Edit Data** → **All Rows**.
+
+### Useful commands
+
+```bash
+# Stop all containers
+docker-compose down
+
+# Stop and delete the database volume (full reset)
+docker-compose down -v
+
+# View pipeline logs
+docker-compose logs -f pipeline
+```
